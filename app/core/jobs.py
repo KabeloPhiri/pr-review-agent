@@ -87,8 +87,7 @@ class InMemoryJobStore:
         stale = [
             job_id
             for job_id, job in self._jobs.items()
-            if job.updated_at < cutoff
-            and job.status in {JobStatus.COMPLETED, JobStatus.FAILED}
+            if job.updated_at < cutoff and job.status in {JobStatus.COMPLETED, JobStatus.FAILED}
         ]
         for job_id in stale:
             self._jobs.pop(job_id, None)

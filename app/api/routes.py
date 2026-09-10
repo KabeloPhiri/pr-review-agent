@@ -22,8 +22,10 @@ from app.api.schemas import (
     ReviewRequest,
     ReviewResponse,
 )
+from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
 from app.core.pipeline import ReviewPipeline
+from app.services.policy import standards
 from app.services.quality import known_quality_connectors
 from app.services.review import known_reviewers
 from app.services.scm import get_connector, known_scm_connectors
@@ -64,7 +66,9 @@ def build_router(runner: JobRunner) -> APIRouter:
         if finished and finished.status is JobStatus.COMPLETED:
             return ReviewResponse.from_job(finished)
         if finished and finished.status is JobStatus.FAILED:
-            return JSONResponse(status_code=500, content=ReviewResponse.from_job(finished).model_dump())
+            return JSONResponse(
+                status_code=500, content=ReviewResponse.from_job(finished).model_dump()
+            )
         return _accepted(finished or job)
 
     @router.get("/review/{job_id}", response_model=ReviewResponse)
@@ -94,8 +98,6 @@ def build_router(runner: JobRunner) -> APIRouter:
             pr = await scm.get_pull_request(ref)
             config = await pipeline.resolve_config(scm, pr, body.config)
             raw = await scm.get_file_text(pr, config.config_path)
-            from app.services.policy import standards
-
             bundle = await standards.load(scm, pr, config)
         finally:
             await scm.aclose()
@@ -128,6 +130,4 @@ def _sync_wait(body: ReviewRequest) -> float:
             return float(override)
         except (TypeError, ValueError):
             logger.warning("Ignoring invalid sync_wait_seconds: %r", override)
-    from app.core.config import resolve
-
     return resolve().sync_wait_seconds

@@ -112,9 +112,7 @@ class FakeScmConnector(ScmConnector):
         existing = [
             ExistingComment(**item)
             for item in (
-                json.loads(stored.read_text(encoding="utf-8"))
-                if stored and stored.exists()
-                else []
+                json.loads(stored.read_text(encoding="utf-8")) if stored and stored.exists() else []
             )
         ]
         # Comments posted in this process count as existing, so a second
@@ -145,4 +143,6 @@ class FakeScmConnector(ScmConnector):
         genre: str = "pr-review-agent",
     ) -> None:
         self.status = (verdict, description)
-        logger.info("[fake-scm] status=%s %s", "passed" if verdict.passed else "failed", description)
+        logger.info(
+            "[fake-scm] status=%s %s", "passed" if verdict.passed else "failed", description
+        )

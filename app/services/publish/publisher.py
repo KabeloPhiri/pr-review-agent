@@ -51,7 +51,9 @@ class Publisher:
                 await self.scm.post_comment(pr, render_finding(finding))
                 posted += 1
             except Exception as exc:
-                logger.warning("Could not comment on %s:%s", finding.file, finding.line, exc_info=True)
+                logger.warning(
+                    "Could not comment on %s:%s", finding.file, finding.line, exc_info=True
+                )
                 result.warnings.append(f"comment failed for {finding.file}:{finding.line} ({exc})")
 
         summary = render_summary(result)

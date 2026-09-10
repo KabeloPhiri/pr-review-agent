@@ -80,7 +80,9 @@ def build_user_prompt(chunk: ReviewChunk, context: ReviewContext) -> str:
     if known:
         lines.append(
             "Already reported by other tools — do not repeat these:\n"
-            + "\n".join(f"- line {issue.line}: [{issue.rule_id}] {issue.message}" for issue in known)
+            + "\n".join(
+                f"- line {issue.line}: [{issue.rule_id}] {issue.message}" for issue in known
+            )
         )
 
     lines.append("\nDiff:\n" + chunk.render())

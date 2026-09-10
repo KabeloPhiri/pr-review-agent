@@ -21,7 +21,9 @@ from app.services.scm.fake import FakeScmConnector
 
 
 def _finding(**kwargs):
-    defaults = dict(file="jobs/sales_etl.py", line=11, message="Avoid collect()", rule_id="pyspark.collect")
+    defaults = dict(
+        file="jobs/sales_etl.py", line=11, message="Avoid collect()", rule_id="pyspark.collect"
+    )
     return Finding(**{**defaults, **kwargs})
 
 
@@ -47,7 +49,9 @@ async def _context(fixture_dir):
     from app.services.policy import standards
 
     scm = FakeScmConnector()
-    ref = PullRequestRef(scm="fake", repository="r", pull_request_id="1", extra={"fixture_dir": str(fixture_dir)})
+    ref = PullRequestRef(
+        scm="fake", repository="r", pull_request_id="1", extra={"fixture_dir": str(fixture_dir)}
+    )
     pr = await scm.get_pull_request(ref)
     config = resolve()
     bundle = await standards.load(scm, pr, config)

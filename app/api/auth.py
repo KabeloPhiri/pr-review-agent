@@ -28,14 +28,9 @@ def token_from_request(request: Request, body_token: str | None = None) -> str |
 
 
 def redact(value: str | None, keep: int = 4) -> str:
-    """Render a token safely for logs and error messages."""
+    """Render a token safely if it ever needs to appear in a log line."""
     if not value:
         return "(none)"
     if len(value) <= keep:
         return "*" * len(value)
     return f"{'*' * (len(value) - keep)}{value[-keep:]}"
-
-
-def scrub(payload: dict) -> dict:
-    """Copy of a request body with the token removed, safe to log or trace."""
-    return {key: value for key, value in payload.items() if key != "scm_token"}

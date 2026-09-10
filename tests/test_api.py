@@ -121,9 +121,7 @@ def test_unknown_plugin_is_a_400_listing_valid_names(client, fixture_dir):
 
 
 def test_unknown_config_key_is_rejected(client, fixture_dir):
-    response = client.post(
-        "/review", json=_body(fixture_dir, mode="sync", config={"not_a_key": 1})
-    )
+    response = client.post("/review", json=_body(fixture_dir, mode="sync", config={"not_a_key": 1}))
     assert response.status_code == 400
 
 

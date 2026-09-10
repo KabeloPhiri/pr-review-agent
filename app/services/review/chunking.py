@@ -42,7 +42,9 @@ class ReviewChunk:
         out: list[str] = []
         for hunk in self.hunks:
             header = f" {hunk.header}" if hunk.header else ""
-            out.append(f"@@ new lines {hunk.new_start}..{hunk.new_start + hunk.new_lines - 1} @@{header}")
+            out.append(
+                f"@@ new lines {hunk.new_start}..{hunk.new_start + hunk.new_lines - 1} @@{header}"
+            )
             line_no = hunk.new_start
             for raw in hunk.lines:
                 marker, text = raw[:1] or " ", raw[1:]

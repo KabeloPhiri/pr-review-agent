@@ -98,9 +98,7 @@ async def test_partial_review_failure_still_reports(ref, monkeypatch):
     async def one_chunk_fails(self, chunks, context):
         context.failed_chunks = 1
         context.warnings.append("half the review failed")
-        return [
-            Finding(file=chunks[0].path, line=min(chunks[0].changed_lines), message="found it")
-        ]
+        return [Finding(file=chunks[0].path, line=min(chunks[0].changed_lines), message="found it")]
 
     monkeypatch.setattr(StubReviewer, "review", one_chunk_fails)
     result = await ReviewPipeline().run(ref, overrides={"reviewer": "stub"})

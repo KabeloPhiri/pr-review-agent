@@ -79,7 +79,8 @@ def render_summary(result: ReviewResult) -> CommentDraft:
     if file_level:
         lines += ["", "### Findings without a line anchor", ""]
         lines += [
-            f"- `{f.file}` · **{f.severity.value}** · `{f.rule_id}` — {f.message}" for f in file_level
+            f"- `{f.file}` · **{f.severity.value}** · `{f.rule_id}` — {f.message}"
+            for f in file_level
         ]
 
     if result.files_skipped:

@@ -127,7 +127,9 @@ class AzureDevOpsConnector(ScmConnector):
                 return response
             if attempt < MAX_ATTEMPTS:
                 await asyncio.sleep(2**attempt)
-        raise ScmError(f"{method} {url} failed after {MAX_ATTEMPTS} attempts", detail=str(last_error))
+        raise ScmError(
+            f"{method} {url} failed after {MAX_ATTEMPTS} attempts", detail=str(last_error)
+        )
 
     @staticmethod
     def _raise_for_status(response: httpx.Response, method: str, url: str) -> None:
@@ -189,7 +191,7 @@ class AzureDevOpsConnector(ScmConnector):
 
         files = await asyncio.gather(*(build(change) for change in changes), return_exceptions=True)
         out: list[DiffFile] = []
-        for change, file in zip(changes, files):
+        for change, file in zip(changes, files, strict=True):
             if isinstance(file, Exception):
                 logger.warning("Could not diff %s: %s", change.get("item", {}).get("path"), file)
                 continue
@@ -221,7 +223,9 @@ class AzureDevOpsConnector(ScmConnector):
             if len(batch) < CHANGE_PAGE_SIZE:
                 break
         else:
-            logger.warning("Stopped after %d pages of changes for %s", MAX_CHANGE_PAGES, pr.ref.slug())
+            logger.warning(
+                "Stopped after %d pages of changes for %s", MAX_CHANGE_PAGES, pr.ref.slug()
+            )
         return collected
 
     async def _diff_one_file(self, pr: PullRequest, change: dict) -> DiffFile | None:
@@ -231,7 +235,9 @@ class AzureDevOpsConnector(ScmConnector):
             return None
 
         change_type = _parse_change_type(change.get("changeType", "edit"))
-        previous_path = (change.get("originalPath") or change.get("sourceServerItem") or "").lstrip("/")
+        previous_path = (change.get("originalPath") or change.get("sourceServerItem") or "").lstrip(
+            "/"
+        )
         previous_path = previous_path or None
 
         old_text: str | None = ""
@@ -243,7 +249,12 @@ class AzureDevOpsConnector(ScmConnector):
 
         # `None` means the item API refused to hand back text: binary, or a
         # blob this token cannot read. Either way it is not reviewable.
-        if old_text is None or new_text is None or _looks_binary(old_text) or _looks_binary(new_text):
+        if (
+            old_text is None
+            or new_text is None
+            or _looks_binary(old_text)
+            or _looks_binary(new_text)
+        ):
             return DiffFile(path=path, change_type=change_type, is_binary=True)
 
         patch = build_unified_diff(old_text, new_text, path, previous_path=previous_path)

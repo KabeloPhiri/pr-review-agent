@@ -17,14 +17,7 @@ import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
 from app.core.errors import ReviewerError
-from app.core.models import (
-    Diff,
-    Finding,
-    PullRequest,
-    PullRequestRef,
-    ReviewResult,
-    Verdict,
-)
+from app.core.models import Diff, Finding, PullRequest, PullRequestRef, ReviewResult
 from app.services.policy import gate, standards
 from app.services.publish.publisher import Publisher
 from app.services.quality import get_quality_connector
@@ -175,11 +168,3 @@ def _current_trace_id() -> str | None:
         return span.trace_id if span else None
     except Exception:
         return None
-
-
-def empty_result(ref: PullRequestRef, reason: str) -> ReviewResult:
-    return ReviewResult(
-        ref=ref,
-        findings=[],
-        verdict=Verdict(passed=True, gate=EffectiveConfig().severity_gate, reason=reason),
-    )

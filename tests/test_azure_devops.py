@@ -203,7 +203,9 @@ async def test_post_comment_sends_thread_context(connector, api):
 
 async def test_summary_comment_has_no_thread_context(connector, api):
     pr = await connector.get_pull_request(_ref())
-    await connector.post_comment(pr, CommentDraft(body="summary", marker="prreview:s", is_summary=True))
+    await connector.post_comment(
+        pr, CommentDraft(body="summary", marker="prreview:s", is_summary=True)
+    )
     body = json.loads(api.find("/threads", method="POST").content)
     assert "threadContext" not in body
     await connector.aclose()
@@ -235,7 +237,9 @@ async def test_close_comment_marks_the_thread_fixed(connector, api):
 
 async def test_html_response_is_treated_as_an_auth_failure():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(203, text="<html>sign in</html>", headers={"content-type": "text/html"})
+        return httpx.Response(
+            203, text="<html>sign in</html>", headers={"content-type": "text/html"}
+        )
 
     connector = AzureDevOpsConnector(token="bad", transport=httpx.MockTransport(handler))
     with pytest.raises(ScmAuthError):
