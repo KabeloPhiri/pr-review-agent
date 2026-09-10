@@ -91,6 +91,7 @@ class LlmReviewer(Reviewer):
             if isinstance(result, Exception):
                 logger.warning("Review failed for %s: %s", chunk.path, result, exc_info=result)
                 context.warnings.append(f"{chunk.path}: review failed ({result})")
+                context.failed_chunks += 1
                 continue
             for finding in result:
                 seen = per_file.get(finding.file, 0)

@@ -25,6 +25,9 @@ class ReviewContext:
     standards: StandardsBundle
     known_issues: list[Finding] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Chunks the reviewer could not review at all. The pipeline refuses to
+    #: report a clean pass when this covers every chunk.
+    failed_chunks: int = 0
 
     def known_issues_for(self, path: str) -> list[Finding]:
         return [issue for issue in self.known_issues if issue.file == path]

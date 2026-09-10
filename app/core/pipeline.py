@@ -16,6 +16,7 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
+from app.core.errors import ReviewerError
 from app.core.models import (
     Diff,
     Finding,
@@ -125,6 +126,14 @@ class ReviewPipeline:
             model_findings = await reviewer.review(chunks, context)
         finally:
             await reviewer.aclose()
+
+        # A review that reached nothing must never report a clean pass — that
+        # would turn a model outage into a green light on every pull request.
+        if context.failed_chunks >= len(chunks):
+            raise ReviewerError(
+                f"The reviewer could not review any of the {len(chunks)} chunk(s)",
+                detail="; ".join(context.warnings[:3]) or None,
+            )
 
         merged = _merge(known_issues, model_findings)
         return merged, [chunk.path for chunk in chunks], skipped, context.warnings

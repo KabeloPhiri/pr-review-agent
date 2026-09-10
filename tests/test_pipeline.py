@@ -1,5 +1,8 @@
 """End-to-end pipeline test: fixture SCM, stub reviewer, no network."""
 
+import pytest
+
+from app.core.errors import ReviewerError
 from app.core.models import Finding, GateLevel, Severity
 from app.core.pipeline import ReviewPipeline
 from app.services.review.base import Reviewer, reviewer_registry
@@ -74,6 +77,35 @@ async def test_request_overrides_beat_repo_config(ref):
     )
     assert result.verdict.gate is GateLevel.NONE
     assert result.verdict.passed is True
+
+
+async def test_total_review_failure_does_not_pass_the_pull_request(ref, monkeypatch):
+    """A model outage must fail loudly, never green-light every pull request."""
+
+    async def all_chunks_fail(self, chunks, context):
+        context.failed_chunks = len(chunks)
+        context.warnings.extend(f"{c.path}: review failed (endpoint down)" for c in chunks)
+        return []
+
+    monkeypatch.setattr(StubReviewer, "review", all_chunks_fail)
+
+    with pytest.raises(ReviewerError) as exc:
+        await ReviewPipeline().run(ref, overrides={"reviewer": "stub"})
+    assert "could not review any" in str(exc.value)
+
+
+async def test_partial_review_failure_still_reports(ref, monkeypatch):
+    async def one_chunk_fails(self, chunks, context):
+        context.failed_chunks = 1
+        context.warnings.append("half the review failed")
+        return [
+            Finding(file=chunks[0].path, line=min(chunks[0].changed_lines), message="found it")
+        ]
+
+    monkeypatch.setattr(StubReviewer, "review", one_chunk_fails)
+    result = await ReviewPipeline().run(ref, overrides={"reviewer": "stub"})
+    assert len(result.findings) == 1
+    assert "half the review failed" in result.warnings
 
 
 async def test_only_supported_languages_are_reviewed(ref):
