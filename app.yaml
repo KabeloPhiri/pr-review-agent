@@ -1,0 +1,18 @@
+# Used when deploying with `databricks apps deploy` (the manual path).
+# With `databricks bundle deploy`, the config block in databricks.yml wins.
+# Note the camelCase `valueFrom` here versus snake_case `value_from` there.
+command: ["uv", "run", "start-server"]
+
+env:
+  - name: MLFLOW_TRACKING_URI
+    value: "databricks"
+  - name: MLFLOW_REGISTRY_URI
+    value: "databricks-uc"
+  - name: MLFLOW_EXPERIMENT_ID
+    valueFrom: "experiment"
+  - name: LOG_LEVEL
+    value: "INFO"
+  - name: PRREVIEW_MODEL_ENDPOINT
+    value: "databricks-gpt-5-2"
+  - name: PRREVIEW_SEVERITY_GATE
+    value: "error"

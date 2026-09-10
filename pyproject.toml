@@ -1,0 +1,51 @@
+[project]
+name = "pr-review-agent"
+version = "0.1.0"
+description = "AI pull-request reviewer served as a Databricks App"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.129.0",
+    "uvicorn>=0.41.0",
+    "mlflow>=3.10.0",
+    "databricks-sdk>=0.44.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.9.0",
+    "python-dotenv>=1.2.1",
+    "PyYAML>=6.0.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[dependency-groups]
+dev = [
+    "hatchling>=1.28.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+setup = [
+    "ruamel.yaml>=0.18.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "setup"]
+
+[project.scripts]
+start-server = "app.server:main"
+quickstart = "scripts.quickstart:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["I", "B", "F401", "E722", "F403"]

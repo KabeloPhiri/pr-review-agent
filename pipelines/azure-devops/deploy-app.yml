@@ -1,0 +1,41 @@
+# Deploy the review app itself to Databricks Apps.
+#
+# Uses the same `pr-review-agent` variable group as pr-review.yml. The service
+# principal needs CAN_MANAGE on the app.
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: pr-review-agent
+  - name: bundleTarget
+    value: dev
+
+steps:
+  - checkout: self
+
+  - task: Bash@3
+    displayName: Deploy bundle
+    env:
+      DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+
+        export DATABRICKS_HOST="$DATABRICKS_HOST"
+        export DATABRICKS_CLIENT_ID="$DATABRICKS_CLIENT_ID"
+        export DATABRICKS_CLIENT_SECRET="$DATABRICKS_CLIENT_SECRET"
+
+        databricks bundle validate --target "$BUNDLETARGET"
+        databricks bundle deploy --target "$BUNDLETARGET"
+
+        # `bundle deploy` uploads code but does not restart the app; without
+        # `bundle run` the app keeps serving the previous version.
+        databricks bundle run pr_review_agent --target "$BUNDLETARGET"

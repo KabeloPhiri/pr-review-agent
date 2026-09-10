@@ -1,0 +1,58 @@
+bundle:
+  name: pr_review_agent
+
+resources:
+  apps:
+    pr_review_agent:
+      name: "pr-review-agent"
+      description: "AI pull request reviewer for Azure DevOps"
+      source_code_path: ./
+      config:
+        command: ["uv", "run", "start-server"]
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "databricks"
+          - name: MLFLOW_REGISTRY_URI
+            value: "databricks-uc"
+          - name: MLFLOW_EXPERIMENT_ID
+            value_from: "experiment"
+          - name: LOG_LEVEL
+            value: "INFO"
+
+          # Any field of app/defaults/config.yaml can be overridden here with
+          # PRREVIEW_<FIELD>. A reviewed repo's .prreview/config.yaml still
+          # wins over these.
+          - name: PRREVIEW_MODEL_ENDPOINT
+            value: "databricks-gpt-5-2"
+          - name: PRREVIEW_SEVERITY_GATE
+            value: "error"
+
+      # Resources this app is allowed to use.
+      resources:
+        - name: 'experiment'
+          experiment:
+            # Filled in by `uv run quickstart`.
+            experiment_id: ""
+            permission: 'CAN_MANAGE'
+
+        - name: 'review-model'
+          serving_endpoint:
+            # Must match PRREVIEW_MODEL_ENDPOINT above.
+            name: 'databricks-gpt-5-2'
+            permission: 'CAN_QUERY'
+
+targets:
+  dev:
+    mode: development
+    default: true
+    # workspace:
+    #   host: https://<your-workspace>.azuredatabricks.net
+
+  prod:
+    mode: production
+    # workspace:
+    #   host: https://<your-workspace>.azuredatabricks.net
+    resources:
+      apps:
+        pr_review_agent:
+          name: pr-review-agent

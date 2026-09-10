@@ -1,0 +1,33 @@
+# Bundled defaults. A reviewed repo overrides any of these in
+# .prreview/config.yaml; the app overrides them with PRREVIEW_* env vars.
+
+scm: azure_devops
+quality: noop
+reviewer: llm
+analyzers: [python, pyspark, sql]
+
+model_endpoint: databricks-gpt-5-2
+temperature: 0.0
+max_chunk_chars: 12000
+
+max_files: 60
+max_findings_per_file: 10
+max_diff_bytes: 400000
+sync_wait_seconds: 90.0
+exclude_paths:
+  - "**/*.ipynb"
+  - "**/migrations/**"
+  - "**/node_modules/**"
+  - "**/*.lock"
+  - "**/*.min.js"
+
+standards:
+  - .prreview/standards.md
+  - .prreview/naming.md
+config_path: .prreview/config.yaml
+
+severity_gate: error
+post_comments: true
+post_status: true
+status_genre: pr-review-agent
+status_name: ai-code-review

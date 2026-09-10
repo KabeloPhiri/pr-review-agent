@@ -1,0 +1,4 @@
+# Repo-level overrides used by the fixture tests.
+severity_gate: warning
+max_findings_per_file: 5
+model_endpoint: databricks-gpt-5-2

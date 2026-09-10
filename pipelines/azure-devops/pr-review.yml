@@ -1,0 +1,122 @@
+# AI PR review — Azure DevOps pipeline.
+#
+# Set this as a Build Validation branch policy on the branches you want
+# reviewed, so it runs on every pull request and can block the merge.
+#
+# Prerequisites
+# -------------
+# 1. A variable group named `pr-review-agent` (Pipelines -> Library) with:
+#      DATABRICKS_HOST           https://<workspace>.azuredatabricks.net
+#      DATABRICKS_CLIENT_ID      service principal application id
+#      DATABRICKS_CLIENT_SECRET  service principal secret   (mark as secret)
+#      ADO_PAT                   Azure DevOps PAT           (mark as secret)
+#      PR_REVIEW_APP_URL         https://<app>.databricksapps.com
+#
+#    The service principal needs CAN_USE on the Databricks App. The PAT needs:
+#      Code (Read), Pull Request Threads (Read & Write), Code Status (Read & Write)
+#
+# 2. To let the review block a merge, add the app's status
+#    (`pr-review-agent/ai-code-review`) as a required Status Check policy, or
+#    keep `failOnFindings: true` below so this pipeline fails instead.
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: pr-review-agent
+  - name: reviewMode
+    value: auto          # auto | sync | async
+  - name: failOnFindings
+    value: true          # fail this build when the review verdict is "failed"
+
+steps:
+  - checkout: none
+
+  - task: Bash@3
+    displayName: AI code review
+    env:
+      DATABRICKS_CLIENT_SECRET: $(DATABRICKS_CLIENT_SECRET)
+      ADO_PAT: $(ADO_PAT)
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+
+        APP_URL="${PR_REVIEW_APP_URL%/}"
+        API="$(echo "$SYSTEM_COLLECTIONURI" | sed 's:/*$::')"
+
+        # 1. Databricks Apps only accept OAuth tokens, so mint one from the
+        #    service principal's client credentials.
+        TOKEN=$(curl -sS --fail-with-body \
+          -u "$DATABRICKS_CLIENT_ID:$DATABRICKS_CLIENT_SECRET" \
+          -d 'grant_type=client_credentials&scope=all-apis' \
+          "${DATABRICKS_HOST%/}/oidc/v1/token" | jq -r .access_token)
+
+        if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+          echo "##vso[task.logissue type=error]Could not obtain a Databricks OAuth token"
+          exit 1
+        fi
+
+        # 2. Ask the app to review this pull request. The Azure DevOps PAT
+        #    travels in a header and is used only for this review.
+        BODY=$(jq -n \
+          --arg org "$(basename "$API")" \
+          --arg project "$SYSTEM_TEAMPROJECT" \
+          --arg repo "$BUILD_REPOSITORY_ID" \
+          --arg pr "$SYSTEM_PULLREQUEST_PULLREQUESTID" \
+          --arg mode "$REVIEWMODE" \
+          '{scm:"azure_devops", organization:$org, project:$project,
+            repository:$repo, pull_request_id:$pr, mode:$mode}')
+
+        RESPONSE=$(curl -sS -w '\n%{http_code}' \
+          -X POST "$APP_URL/review" \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "X-SCM-Token: $ADO_PAT" \
+          -H 'Content-Type: application/json' \
+          -d "$BODY")
+
+        STATUS=$(echo "$RESPONSE" | tail -n1)
+        PAYLOAD=$(echo "$RESPONSE" | sed '$d')
+
+        # 3. A 202 means the review is running in the background; poll for it.
+        if [ "$STATUS" = "202" ]; then
+          JOB_ID=$(echo "$PAYLOAD" | jq -r .job_id)
+          echo "Review queued as $JOB_ID; polling..."
+          for _ in $(seq 1 60); do
+            sleep 10
+            PAYLOAD=$(curl -sS "$APP_URL/review/$JOB_ID" -H "Authorization: Bearer $TOKEN")
+            STATE=$(echo "$PAYLOAD" | jq -r .status)
+            [ "$STATE" = "completed" ] && break
+            if [ "$STATE" = "failed" ]; then
+              echo "##vso[task.logissue type=error]Review failed: $(echo "$PAYLOAD" | jq -r .error)"
+              exit 1
+            fi
+          done
+          if [ "$STATE" != "completed" ]; then
+            echo "##vso[task.logissue type=warning]Review did not finish in time; comments may still appear."
+            exit 0
+          fi
+        elif [ "$STATUS" != "200" ]; then
+          echo "##vso[task.logissue type=error]Review request failed ($STATUS): $PAYLOAD"
+          exit 1
+        fi
+
+        # 4. Report.
+        echo "$PAYLOAD" | jq -r '
+          .result as $r
+          | "Findings: \($r.findings | length)  ·  posted \($r.comments_posted) comment(s)",
+            "Verdict: \(if $r.verdict.passed then "passed" else "FAILED" end) — \($r.verdict.reason)"'
+
+        PASSED=$(echo "$PAYLOAD" | jq -r '.result.verdict.passed')
+        if [ "$FAILONFINDINGS" = "true" ] && [ "$PASSED" != "true" ]; then
+          echo "##vso[task.logissue type=error]Blocking findings — see the pull request comments."
+          exit 1
+        fi

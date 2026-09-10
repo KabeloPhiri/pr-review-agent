@@ -1,0 +1,15 @@
+artifact_path: file:///C:/Users/kabel/OneDrive/Documents/Projects/pr-review-agent/mlruns/0/models/m-2c7b0373d9f84d0e9ad35b2e2806cc84/artifacts
+flavors: {}
+is_signature_from_type_hint: false
+metadata:
+  mlflow.model.isExternal: true
+mlflow_version: 3.16.0
+model_id: m-2c7b0373d9f84d0e9ad35b2e2806cc84
+model_uuid: m-2c7b0373d9f84d0e9ad35b2e2806cc84
+prompts: null
+signature:
+  inputs: '[{"type": "boolean", "required": true}]'
+  outputs: '[{"type": "boolean", "required": true}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-09-10 18:21:38.398164'

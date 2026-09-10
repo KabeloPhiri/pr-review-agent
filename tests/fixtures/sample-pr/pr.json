@@ -1,0 +1,10 @@
+{
+  "title": "Add sales summary job",
+  "description": "Adds a daily summary for the sales pipeline.",
+  "author": "dev@example.com",
+  "source_branch": "refs/heads/feature/sales-summary",
+  "target_branch": "refs/heads/main",
+  "source_commit": "aaaa1111",
+  "target_commit": "bbbb2222",
+  "url": "https://dev.azure.com/contoso/data/_git/platform/pullrequest/42"
+}
