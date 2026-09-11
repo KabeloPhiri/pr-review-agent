@@ -1,0 +1,133 @@
+# AI PR review — GitHub Actions workflow.
+#
+# Copy this to `.github/workflows/pr-review.yml` in the repository you want
+# reviewed, so it runs on every pull request and can block the merge.
+#
+# Prerequisites
+# -------------
+# 1. Repository (or organisation) secrets:
+#      DATABRICKS_HOST           https://<workspace>.cloud.databricks.com
+#      DATABRICKS_CLIENT_ID      service principal application id
+#      DATABRICKS_CLIENT_SECRET  service principal secret
+#      PR_REVIEW_APP_URL         https://<app>.databricksapps.com
+#
+#    The service principal needs CAN_USE on the Databricks App.
+#
+# 2. The job's own `GITHUB_TOKEN` is the SCM token — no PAT to manage. It
+#    needs the `permissions:` block below; without `pull-requests: write`
+#    the agent cannot comment, and without `statuses: write` it cannot
+#    publish the check that gates the merge.
+#
+# 3. To let the review block a merge, add `pr-review-agent/ai-code-review`
+#    as a required status check in branch protection, or keep
+#    `FAIL_ON_FINDINGS: true` below so this workflow fails instead.
+
+name: AI code review
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One review per pull request: a new push cancels the run still in flight.
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Draft pull requests are still work in progress.
+    if: github.event.pull_request.draft == false
+    env:
+      REVIEW_MODE: auto          # auto | sync | async
+      FAIL_ON_FINDINGS: 'true'   # fail this job when the verdict is "failed"
+    steps:
+      - name: Request review
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          PR_REVIEW_APP_URL: ${{ secrets.PR_REVIEW_APP_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          APP_URL="${PR_REVIEW_APP_URL%/}"
+
+          # 1. Databricks Apps only accept OAuth tokens, so mint one from the
+          #    service principal's client credentials.
+          TOKEN=$(curl -sS --fail-with-body \
+            -u "$DATABRICKS_CLIENT_ID:$DATABRICKS_CLIENT_SECRET" \
+            -d 'grant_type=client_credentials&scope=all-apis' \
+            "${DATABRICKS_HOST%/}/oidc/v1/token" | jq -r .access_token)
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Could not mint a Databricks OAuth token."
+            exit 1
+          fi
+
+          # 2. Ask for the review. The repo's own GITHUB_TOKEN travels in
+          #    X-SCM-Token and is never stored by the app.
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$APP_URL/review" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-SCM-Token: $GH_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg repo "$REPO" --arg pr "$PR_NUMBER" --arg mode "$REVIEW_MODE" \
+                  '{scm: "github", repository: $repo, pull_request_id: $pr, mode: $mode}')")
+
+          cat response.json | jq . || cat response.json
+
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::The review endpoint returned $HTTP_CODE."
+            exit 1
+          fi
+
+          # 3. `auto` hands back a job id when the review outruns the app's
+          #    ~120s connection limit. Comments and the status still land, so
+          #    poll only because this job wants the verdict.
+          STATUS=$(jq -r '.status' response.json)
+          JOB_ID=$(jq -r '.job_id // empty' response.json)
+
+          if [ "$STATUS" = "queued" ] || [ "$STATUS" = "running" ]; then
+            echo "Review queued as $JOB_ID; polling."
+            for _ in $(seq 1 60); do
+              sleep 10
+              curl -sS -o response.json \
+                -H "Authorization: Bearer $TOKEN" \
+                "$APP_URL/review/$JOB_ID" || true
+              STATUS=$(jq -r '.status // "unknown"' response.json)
+              [ "$STATUS" = "completed" ] && break
+              [ "$STATUS" = "failed" ] && break
+              # Job state is per-process; a 404 means the app restarted or
+              # another replica answered, not that the review died.
+              if [ "$STATUS" = "unknown" ]; then
+                echo "::warning::Lost track of job $JOB_ID. Gate on the commit status instead."
+                exit 0
+              fi
+            done
+          fi
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "::error::The review failed: $(jq -r '.error // "unknown error"' response.json)"
+            exit 1
+          fi
+
+          PASSED=$(jq -r '.result.verdict.passed // true' response.json)
+          REASON=$(jq -r '.result.verdict.reason // ""' response.json)
+          echo "### AI code review: $([ "$PASSED" = "true" ] && echo '✅ passed' || echo '❌ changes requested')" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$PASSED" != "true" ] && [ "$FAIL_ON_FINDINGS" = "true" ]; then
+            echo "::error::$REASON"
+            exit 1
+          fi
