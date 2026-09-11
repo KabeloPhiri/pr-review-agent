@@ -43,10 +43,12 @@ class EffectiveConfig(BaseModel):
     scm: str = "azure_devops"
     quality: str = "noop"
     reviewer: str = "llm"
-    analyzers: list[str] = Field(default_factory=lambda: ["python", "pyspark", "sql"])
+    #: Allow-list of bundled standards. Empty means "every standard in
+    #: app/defaults/standards", so dropping a file in is enough to enable it.
+    analyzers: list[str] = Field(default_factory=list)
 
     # --- review model ---
-    model_endpoint: str = "databricks-gpt-5-2"
+    model_endpoint: str = "databricks-llama-4-maverick"
     temperature: float = 0.0
     max_chunk_chars: int = 12000
 

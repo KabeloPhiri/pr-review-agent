@@ -16,6 +16,7 @@ from app.services.publish.publisher import Publisher
 from app.services.review.base import ReviewContext
 from app.services.review.chunking import build_chunks
 from app.services.review.llm_reviewer import LlmReviewer
+from app.services.review.prompts import build_user_prompt
 from app.services.scm.diffparse import parse_unified_diff
 from app.services.scm.fake import FakeScmConnector
 
@@ -84,6 +85,22 @@ async def test_unparseable_reply_degrades_to_a_warning(fixture_dir):
 
     assert reviewer._parse("I think this looks fine!", chunk, context) == []
     assert any("could not be parsed" in w for w in context.warnings)
+    # A truncated reply is indistinguishable from no review, so it counts as
+    # a chunk that failed — that is what stops a garbled run passing the PR.
+    assert context.failed_chunks == 1
+
+
+async def test_an_empty_reply_is_a_clean_result_not_a_failure(fixture_dir):
+    """ "No findings" is the good outcome and must not look like an outage."""
+    config, context = await _context(fixture_dir)
+    diff = parse_unified_diff((fixture_dir / "diff.patch").read_text(encoding="utf-8"))
+    chunk = build_chunks(diff, config)[0][0]
+    reviewer = LlmReviewer(config, client=object())
+
+    assert reviewer._parse('{"findings": []}', chunk, context) == []
+    assert reviewer._parse("", chunk, context) == []
+    assert context.failed_chunks == 0
+    assert context.warnings == []
 
 
 async def test_line_outside_the_diff_becomes_file_level(fixture_dir):
@@ -167,3 +184,53 @@ async def test_post_comments_disabled_still_sets_status(pr):
     assert await publisher.publish(pr, _result([_finding()])) == 0
     assert scm.posted == []
     assert scm.status is not None
+
+
+# --- reply shapes ---------------------------------------------------------
+
+
+class _Message:
+    def __init__(self, content):
+        self.content = content
+
+
+def test_plain_string_content_is_returned_as_is():
+    from app.services.review.llm_reviewer import _message_text
+
+    assert _message_text(_Message('{"findings": []}')) == '{"findings": []}'
+
+
+def test_reasoning_parts_keep_only_the_answer():
+    """gpt-oss-style endpoints return reasoning alongside the answer.
+
+    Feeding the chain of thought to the JSON parser would break every review
+    against those endpoints, so only the `text` part may survive.
+    """
+    from app.services.review.llm_reviewer import _message_text
+
+    message = _Message(
+        [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking..."}]},
+            {"type": "text", "text": '{"findings": []}'},
+        ]
+    )
+    assert _message_text(message) == '{"findings": []}'
+
+
+def test_missing_content_is_an_empty_string_not_a_crash():
+    from app.services.review.llm_reviewer import _message_text
+
+    assert _message_text(_Message(None)) == ""
+
+
+async def test_user_prompt_carries_the_json_keyword(fixture_dir):
+    """Databricks 400s on `response_format` unless the *user* message says "json".
+
+    Without it every call silently falls back to an unconstrained completion,
+    so this one lowercase word is what keeps structured output switched on.
+    """
+    config, context = await _context(fixture_dir)
+    diff = parse_unified_diff((fixture_dir / "diff.patch").read_text(encoding="utf-8"))
+    chunk = build_chunks(diff, config)[0][0]
+
+    assert "json" in build_user_prompt(chunk, context)

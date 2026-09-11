@@ -13,6 +13,6 @@ env:
   - name: LOG_LEVEL
     value: "INFO"
   - name: PRREVIEW_MODEL_ENDPOINT
-    value: "databricks-gpt-5-2"
+    value: "databricks-llama-4-maverick"
   - name: PRREVIEW_SEVERITY_GATE
     value: "error"

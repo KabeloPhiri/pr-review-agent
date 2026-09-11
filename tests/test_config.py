@@ -10,7 +10,9 @@ def test_defaults_load_from_bundled_yaml():
     assert config.scm == "azure_devops"
     assert config.reviewer == "llm"
     assert config.severity_gate is GateLevel.ERROR
-    assert "python" in config.analyzers
+    # Empty is the "use every standard in app/defaults/standards" default, so
+    # dropping a new markdown file in there needs no config change.
+    assert config.analyzers == []
 
 
 def test_precedence_env_then_repo_then_request():

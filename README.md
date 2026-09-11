@@ -1,18 +1,18 @@
 # PR Review Agent
 
-An AI pull request reviewer that runs as a **Databricks App**. An Azure DevOps
-pipeline calls it on every pull request; it reads the diff, reviews the changed
-lines against your team's coding standards, and posts the findings back as
-inline comments plus a summary — with a pass/fail status a branch policy can
-gate on.
+An AI pull request reviewer that runs as a **Databricks App**. A GitHub
+Actions workflow or an Azure DevOps pipeline calls it on every pull request; it
+reads the diff, reviews the changed lines against your team's coding standards,
+and posts the findings back as inline comments plus a summary — with a
+pass/fail status a branch policy can gate on.
 
 Code focus: **PySpark, SQL and Python**.
 
 ```
 PR opened/updated
-   └─> pr-review.yml (build validation policy)
+   └─> pr-review.yml (GitHub Actions / ADO build validation)
          └─> POST /review  ──>  Databricks App
-                                  ├─ fetch PR + diff        (Azure DevOps REST 7.1)
+                                  ├─ fetch PR + diff        (GitHub or Azure DevOps REST)
                                   ├─ load .prreview/ config + standards
                                   ├─ review changed lines   (Databricks model serving)
                                   ├─ gate on severity
@@ -27,10 +27,10 @@ imported, so features can be added or removed without touching the core.
 
 | Family | Interface | Ships with | Add one by |
 |---|---|---|---|
-| SCM | `ScmConnector` | `azure_devops`, `fake` | new module in `app/services/scm/` + a line in `_MODULES` |
+| SCM | `ScmConnector` | `github`, `azure_devops`, `fake` | new module in `app/services/scm/` + a line in `_MODULES` |
 | Quality tools | `QualityConnector` | `noop` (SonarQube adapter is next) | new module in `app/services/quality/` |
 | Reviewer | `Reviewer` | `llm` (one structured-output call per chunk) | new module in `app/services/review/` |
-| Analyzers | standards fragments | `python`, `pyspark`, `sql`, `naming` | markdown in `app/defaults/standards/` |
+| Analyzers | standards fragments | `python`, `pyspark`, `sql`, `naming` | drop markdown in `app/defaults/standards/` — no code change |
 
 ## Configuration
 
@@ -56,7 +56,7 @@ request, so a misconfigured repo is one call away from being explained.
 ```yaml
 # .prreview/config.yaml
 analyzers: [python, pyspark, sql]
-model_endpoint: databricks-gpt-5-2
+model_endpoint: databricks-llama-4-maverick
 severity_gate: error          # error | warning | none
 max_findings_per_file: 10
 exclude_paths: ["**/*.ipynb", "tests/fixtures/**"]
@@ -69,8 +69,9 @@ how the bot reviews is a normal pull request against `.prreview/`.
 ## API
 
 All endpoints require a Databricks OAuth bearer token (Apps reject PATs). The
-Azure DevOps PAT for the *reviewed* repo travels in `X-SCM-Token` and is never
-stored — it lives only for the duration of that review.
+token for the *reviewed* repo — a GitHub token or an Azure DevOps PAT — travels
+in `X-SCM-Token` and is never stored; it lives only for the duration of that
+review.
 
 | Endpoint | Purpose |
 |---|---|
@@ -144,6 +145,23 @@ and `CAN_QUERY` on the review model's serving endpoint. Change
 `PRREVIEW_MODEL_ENDPOINT` and the `serving_endpoint` resource together.
 
 `pipelines/azure-devops/deploy-app.yml` does the same from a pipeline.
+
+## Wiring up GitHub
+
+1. Copy `pipelines/github/pr-review.yml` to `.github/workflows/pr-review.yml`
+   in the repository you want reviewed.
+2. Add the repository secrets listed in that file's header
+   (`DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET`,
+   `PR_REVIEW_APP_URL`).
+3. Optionally make `pr-review-agent/ai-code-review` a required status check in
+   branch protection so the review itself blocks the merge.
+
+The workflow's own `GITHUB_TOKEN` is the SCM token — there is no PAT to
+manage — but it needs `pull-requests: write` (to comment) and
+`statuses: write` (to publish the gate). Running the agent against a repo from
+*outside* Actions needs a classic PAT with `repo`, or a fine-grained token with
+Pull requests (Read & write), Contents (Read) and Commit statuses (Read &
+write).
 
 ## Wiring up Azure DevOps
 

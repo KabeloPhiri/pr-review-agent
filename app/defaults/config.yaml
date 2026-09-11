@@ -4,9 +4,11 @@
 scm: azure_devops
 quality: noop
 reviewer: llm
-analyzers: [python, pyspark, sql]
+# Left empty on purpose: every *.md in app/defaults/standards/ is used.
+# Set an explicit list here or in a repo's .prreview/config.yaml to narrow it.
+analyzers: []
 
-model_endpoint: databricks-gpt-5-2
+model_endpoint: databricks-llama-4-maverick
 temperature: 0.0
 max_chunk_chars: 12000
 

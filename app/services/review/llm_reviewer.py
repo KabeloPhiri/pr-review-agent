@@ -135,19 +135,23 @@ class LlmReviewer(Reviewer):
                     f"Model endpoint {self.config.model_endpoint!r} call failed",
                     detail=str(inner),
                 ) from inner
-        return response.choices[0].message.content or ""
+        return _message_text(response.choices[0].message)
 
     # -- response handling ------------------------------------------------
 
     def _parse(self, content: str, chunk: ReviewChunk, context: ReviewContext) -> list[Finding]:
         """Validate the reply.
 
-        A malformed reply degrades this chunk to a warning on the review
-        rather than failing the pull request — a parser bug must never block
-        a merge.
+        A malformed reply degrades this chunk to a warning rather than raising,
+        so one bad reply cannot block a merge. It still counts as a chunk that
+        was not reviewed: a reply truncated mid-JSON is indistinguishable from
+        no review at all, and if every chunk ends up here the pipeline must
+        fail the run rather than report a clean pass.
         """
         cleaned = _FENCE_RE.sub("", content).strip()
         if not cleaned:
+            # An empty reply is the model saying "nothing to report", which is
+            # a legitimate clean result rather than a failure.
             return []
         try:
             payload = json.loads(cleaned)
@@ -155,6 +159,7 @@ class LlmReviewer(Reviewer):
         except (json.JSONDecodeError, ValidationError, TypeError) as exc:
             logger.warning("Unparseable model reply for %s: %s", chunk.path, exc)
             context.warnings.append(f"{chunk.path}: model reply could not be parsed")
+            context.failed_chunks += 1
             return []
 
         findings: list[Finding] = []
@@ -176,6 +181,34 @@ class LlmReviewer(Reviewer):
                 )
             )
         return findings
+
+
+def _message_text(message: Any) -> str:
+    """Pull the assistant's text out of a reply, whatever shape it arrives in.
+
+    Most endpoints set `content` to a plain string. Reasoning models served on
+    Databricks (the `gpt-oss` family, for one) instead return a list of parts —
+    `{"type": "reasoning", ...}` followed by `{"type": "text", "text": ...}` —
+    and only the text part is the answer. Concatenating everything would feed
+    the model's own chain of thought to the JSON parser.
+    """
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            get = (
+                part.get
+                if isinstance(part, dict)
+                else lambda key, _d=None, _p=part: getattr(_p, key, _d)
+            )
+            if get("type") == "text":
+                parts.append(str(get("text") or ""))
+        if parts:
+            return "\n".join(parts)
+    # Some gateways only populate the streaming-style field.
+    return str(getattr(message, "reasoning_content", "") or "")
 
 
 def _coerce_severity(value: str) -> Severity:

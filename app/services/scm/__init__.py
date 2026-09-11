@@ -14,6 +14,7 @@ from app.services.scm.base import ScmConnector, scm_registry
 
 _MODULES = {
     "azure_devops": "app.services.scm.azure_devops",
+    "github": "app.services.scm.github",
     "fake": "app.services.scm.fake",
 }
 

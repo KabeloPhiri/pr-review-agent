@@ -1,3 +1,7 @@
+---
+applies_to:
+  languages: [sql]
+---
 # SQL standards
 
 Applies to `.sql` files and to SQL strings embedded in Python.

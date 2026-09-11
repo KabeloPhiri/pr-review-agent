@@ -109,3 +109,42 @@ async def test_partial_review_failure_still_reports(ref, monkeypatch):
 async def test_only_supported_languages_are_reviewed(ref):
     await ReviewPipeline().run(ref, overrides={"reviewer": "stub", "analyzers": ["sql"]})
     assert StubReviewer.calls == ["sql/daily_totals.sql"]
+
+
+async def test_scm_token_never_reaches_the_trace(ref, monkeypatch):
+    """The SCM token is a caller credential; a trace is durable storage.
+
+    `@mlflow.trace` captures every argument automatically, so without an
+    explicit redaction the PAT is written to the MLflow experiment in
+    plaintext on every review.
+    """
+    captured = {}
+
+    class _Span:
+        def set_inputs(self, value):
+            captured["inputs"] = value
+
+    monkeypatch.setattr("app.core.pipeline.mlflow.get_current_active_span", lambda: _Span())
+
+    await ReviewPipeline().run(
+        ref, scm_token="ghp_supersecrettoken", overrides={"reviewer": "stub"}, publish=False
+    )
+
+    assert captured["inputs"]["scm_token"] == "(redacted)"
+    assert "ghp_supersecrettoken" not in str(captured["inputs"])
+
+
+async def test_all_replies_unparseable_does_not_pass_the_pull_request(ref, monkeypatch):
+    """A garbled model is an outage in disguise, not a clean bill of health."""
+
+    async def every_reply_is_junk(self, chunks, context):
+        for chunk in chunks:
+            context.warnings.append(f"{chunk.path}: model reply could not be parsed")
+            context.failed_chunks += 1
+        return []
+
+    monkeypatch.setattr(StubReviewer, "review", every_reply_is_junk)
+
+    with pytest.raises(ReviewerError) as exc:
+        await ReviewPipeline().run(ref, overrides={"reviewer": "stub"})
+    assert "could not review any" in str(exc.value)

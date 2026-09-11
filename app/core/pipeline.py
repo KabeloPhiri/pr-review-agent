@@ -51,6 +51,7 @@ class ReviewPipeline:
         overrides: dict[str, Any] | None = None,
         publish: bool = True,
     ) -> ReviewResult:
+        _redact_trace_inputs(ref, overrides, publish)
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
@@ -102,7 +103,7 @@ class ReviewPipeline:
         finally:
             await quality.aclose()
 
-        chunks, skipped = build_chunks(diff, config)
+        chunks, skipped = build_chunks(diff, config, standards_bundle.catalog)
         context = ReviewContext(
             pr=pr,
             config=config,
@@ -144,6 +145,33 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
         merged.append(finding)
     merged.sort(key=lambda f: (f.file, f.line if f.line is not None else -1, -f.severity.rank))
     return merged
+
+
+def _redact_trace_inputs(
+    ref: PullRequestRef, overrides: dict[str, Any] | None, publish: bool
+) -> None:
+    """Replace the span's auto-captured arguments with token-free ones.
+
+    `@mlflow.trace` records every argument it was called with, and `scm_token`
+    is one of them — so without this the caller's PAT is written to the
+    experiment in plaintext on every single review, which is exactly the
+    guarantee `app/api/auth.py` makes that it never is. Inputs are overwritten
+    here, before the span ends and is exported.
+    """
+    try:
+        span = mlflow.get_current_active_span()
+        if span is None:
+            return
+        span.set_inputs(
+            {
+                "ref": ref.model_dump(mode="json"),
+                "overrides": overrides or {},
+                "publish": publish,
+                "scm_token": "(redacted)",
+            }
+        )
+    except Exception:  # tracing must never break a review
+        logger.debug("Could not redact the trace inputs", exc_info=True)
 
 
 def _tag_trace(pr: PullRequest, config: EffectiveConfig) -> None:

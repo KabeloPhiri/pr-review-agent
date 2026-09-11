@@ -1,3 +1,7 @@
+---
+applies_to:
+  languages: [python]
+---
 # Python standards
 
 Applies to `.py` files that are not Spark jobs.

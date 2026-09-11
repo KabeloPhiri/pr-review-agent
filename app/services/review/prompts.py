@@ -86,6 +86,12 @@ def build_user_prompt(chunk: ReviewChunk, context: ReviewContext) -> str:
         )
 
     lines.append("\nDiff:\n" + chunk.render())
+    # The literal lowercase word "json" has to appear in the *user* message:
+    # Databricks rejects `response_format={"type": "json_object"}` with a 400
+    # unless it does, and the system prompt does not count. Without this the
+    # reviewer silently falls back to an unconstrained call, which returns
+    # unparseable prose often enough to fail real reviews.
+    lines.append("\nReturn your findings as the json object described above.")
     return "\n".join(lines)
 
 

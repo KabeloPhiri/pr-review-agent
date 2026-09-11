@@ -1,3 +1,12 @@
+---
+# Narrowed to Spark code: these rules would be noise on a plain script. The
+# pattern is the one that used to be hardcoded as _PYSPARK_HINTS in
+# chunking.py. Single-quoted so YAML keeps the backslashes literal.
+applies_to:
+  languages: [python]
+  path_globs: ['*spark*']
+  content_match: '\b(pyspark|SparkSession|spark\.(read|sql|table|createDataFrame)|DataFrame|withColumn|groupBy|dbutils|delta)\b'
+---
 # PySpark standards
 
 Applies to `.py` files that import `pyspark`, use a `SparkSession`, or manipulate DataFrames.

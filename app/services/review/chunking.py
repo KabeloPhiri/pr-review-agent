@@ -9,20 +9,11 @@ with its number in the new file.
 from __future__ import annotations
 
 import fnmatch
-import re
 from dataclasses import dataclass, field
 
 from app.core.config import EffectiveConfig
 from app.core.models import ChangeType, Diff, DiffFile, Hunk
-
-#: Languages this reviewer knows how to critique. Anything else is skipped
-#: rather than reviewed badly.
-REVIEWABLE_LANGUAGES = {"python", "sql"}
-
-_PYSPARK_HINTS = re.compile(
-    r"\b(pyspark|SparkSession|spark\.(read|sql|table|createDataFrame)|DataFrame|"
-    r"withColumn|groupBy|dbutils|delta)\b"
-)
+from app.services.policy.standards import StandardsCatalog, discover
 
 
 @dataclass
@@ -62,44 +53,33 @@ class ReviewChunk:
         return sum(h.size() for h in self.hunks)
 
 
-def detect_analyzers(file: DiffFile, config: EffectiveConfig) -> list[str]:
-    """Which standards fragments apply to this file."""
-    enabled = set(config.analyzers)
-    analyzers: list[str] = []
-    if file.language == "python":
-        if "python" in enabled:
-            analyzers.append("python")
-        if "pyspark" in enabled and _looks_like_spark(file):
-            analyzers.append("pyspark")
-    elif file.language == "sql":
-        if "sql" in enabled:
-            analyzers.append("sql")
-    return analyzers
+def detect_analyzers(
+    file: DiffFile, config: EffectiveConfig, catalog: StandardsCatalog | None = None
+) -> list[str]:
+    """Which standards fragments apply to this file.
 
-
-def _looks_like_spark(file: DiffFile) -> bool:
-    if "spark" in file.path.lower():
-        return True
-    for hunk in file.hunks:
-        for line in hunk.lines:
-            if _PYSPARK_HINTS.search(line):
-                return True
-    return False
+    The rule lives in each standard's own front matter, so a new analyzer is
+    a markdown file — there is nothing to add here.
+    """
+    return (catalog or discover()).analyzers_for(file, config.analyzers)
 
 
 def is_excluded(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
-def build_chunks(diff: Diff, config: EffectiveConfig) -> tuple[list[ReviewChunk], list[str]]:
+def build_chunks(
+    diff: Diff, config: EffectiveConfig, catalog: StandardsCatalog | None = None
+) -> tuple[list[ReviewChunk], list[str]]:
     """Return (chunks, skipped file descriptions)."""
+    catalog = catalog or discover()
     chunks: list[ReviewChunk] = []
     skipped: list[str] = []
 
     considered = 0
     budget = config.max_diff_bytes
     for file in diff.files:
-        reason = _skip_reason(file, config)
+        reason = _skip_reason(file, config, catalog)
         if reason:
             skipped.append(f"{file.path} ({reason})")
             continue
@@ -107,7 +87,7 @@ def build_chunks(diff: Diff, config: EffectiveConfig) -> tuple[list[ReviewChunk]
         if considered > config.max_files:
             skipped.append(f"{file.path} (over max_files={config.max_files})")
             continue
-        analyzers = detect_analyzers(file, config)
+        analyzers = detect_analyzers(file, config, catalog)
         if not analyzers:
             skipped.append(f"{file.path} (no analyzer enabled for {file.language})")
             continue
@@ -121,14 +101,17 @@ def build_chunks(diff: Diff, config: EffectiveConfig) -> tuple[list[ReviewChunk]
     return chunks, skipped
 
 
-def _skip_reason(file: DiffFile, config: EffectiveConfig) -> str | None:
+def _skip_reason(file: DiffFile, config: EffectiveConfig, catalog: StandardsCatalog) -> str | None:
     if file.is_binary:
         return "binary"
     if file.change_type is ChangeType.DELETE:
         return "deleted"
     if is_excluded(file.path, config.exclude_paths):
         return "excluded by config"
-    if file.language not in REVIEWABLE_LANGUAGES:
+    # A language no standard claims is skipped rather than reviewed badly —
+    # so declaring `languages: [terraform]` in a standard is what makes .tf
+    # files reviewable.
+    if file.language not in catalog.reviewable_languages():
         return f"unsupported type: {file.language or 'unknown'}"
     if not file.hunks:
         return "no textual changes"

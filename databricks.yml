@@ -22,8 +22,10 @@ resources:
           # Any field of app/defaults/config.yaml can be overridden here with
           # PRREVIEW_<FIELD>. A reviewed repo's .prreview/config.yaml still
           # wins over these.
+          - name: PRREVIEW_SCM
+            value: "github"
           - name: PRREVIEW_MODEL_ENDPOINT
-            value: "databricks-gpt-5-2"
+            value: "databricks-llama-4-maverick"
           - name: PRREVIEW_SEVERITY_GATE
             value: "error"
 
@@ -32,21 +34,21 @@ resources:
         - name: 'experiment'
           experiment:
             # Filled in by `uv run quickstart`.
-            experiment_id: ""
+            experiment_id: "294473340647751"
             permission: 'CAN_MANAGE'
 
         - name: 'review-model'
           serving_endpoint:
             # Must match PRREVIEW_MODEL_ENDPOINT above.
-            name: 'databricks-gpt-5-2'
+            name: 'databricks-llama-4-maverick'
             permission: 'CAN_QUERY'
 
 targets:
   dev:
     mode: development
     default: true
-    # workspace:
-    #   host: https://<your-workspace>.azuredatabricks.net
+    workspace:
+      host: https://dbc-88065e15-53ac.cloud.databricks.com
 
   prod:
     mode: production

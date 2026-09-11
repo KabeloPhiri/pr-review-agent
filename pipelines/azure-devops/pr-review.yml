@@ -19,7 +19,7 @@
 #    (`pr-review-agent/ai-code-review`) as a required Status Check policy, or
 #    keep `failOnFindings: true` below so this pipeline fails instead.
 
-trigger: none
+trigger: pr
 
 pr:
   branches:
@@ -35,7 +35,7 @@ variables:
   - name: reviewMode
     value: auto          # auto | sync | async
   - name: failOnFindings
-    value: true          # fail this build when the review verdict is "failed"
+    value: false       # fail this build when the review verdict is "failed"
 
 steps:
   - checkout: none
