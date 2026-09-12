@@ -26,7 +26,10 @@ name: AI code review
 
 on:
   pull_request:
-    branches: [main, develop]
+    # These are the *base* branches a pull request targets. This repo's
+    # default branch is `master`, so leaving `main` here would mean the
+    # workflow never fires.
+    branches: [master, main, develop]
     types: [opened, synchronize, reopened, ready_for_review]
 
 # One review per pull request: a new push cancels the run still in flight.
