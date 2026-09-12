@@ -124,7 +124,9 @@ jobs:
             exit 1
           fi
 
-          PASSED=$(jq -r '.result.verdict.passed // true' response.json)
+          # NOT `// true`: jq's alternative operator treats `false` the same as
+          # `null`, so `false // true` yields true and the gate never fires.
+          PASSED=$(jq -r '.result.verdict.passed | if . == null then true else . end' response.json)
           REASON=$(jq -r '.result.verdict.reason // ""' response.json)
           echo "### AI code review: $([ "$PASSED" = "true" ] && echo '✅ passed' || echo '❌ changes requested')" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
