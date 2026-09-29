@@ -15,7 +15,7 @@ resources:
           - name: MLFLOW_REGISTRY_URI
             value: "databricks-uc"
           - name: MLFLOW_EXPERIMENT_ID
-            value_from: "experiment"
+            value_from: "ai_reviewer_experiment"
           - name: LOG_LEVEL
             value: "INFO"
 
@@ -31,10 +31,10 @@ resources:
 
       # Resources this app is allowed to use.
       resources:
-        - name: 'experiment'
+        - name: 'ai_reviewer_experiment'
           experiment:
             # Filled in by `uv run quickstart`.
-            experiment_id: "294473340647751"
+            experiment_id: "3094137377660895"
             permission: 'CAN_MANAGE'
 
         - name: 'review-model'
@@ -48,7 +48,7 @@ targets:
     mode: development
     default: true
     workspace:
-      host: https://dbc-88065e15-53ac.cloud.databricks.com
+      host: https://adb-4488695583162022.2.azuredatabricks.net
 
   prod:
     mode: production

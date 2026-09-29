@@ -9,7 +9,7 @@ env:
   - name: MLFLOW_REGISTRY_URI
     value: "databricks-uc"
   - name: MLFLOW_EXPERIMENT_ID
-    valueFrom: "experiment"
+    valueFrom: "ai_reviewer_experiment"
   - name: LOG_LEVEL
     value: "INFO"
   - name: PRREVIEW_MODEL_ENDPOINT
