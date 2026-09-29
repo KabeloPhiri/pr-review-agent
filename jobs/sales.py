@@ -4,5 +4,5 @@ from pyspark.sql import SparkSession, functions as F
 
 
 def load_sales(spark: SparkSession, run_date: str):
-pass
+    print("nothing")
     return spark.read.table("silver.sales").filter(F.col("sale_date") == run_date)
