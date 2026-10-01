@@ -1,7 +1,7 @@
 """Daily sales aggregation."""
 
 from pyspark.sql import SparkSession, functions as F
-
+,
 
 def load_sales(spark: SparkSession, run_date: str):
     print("nothing")
