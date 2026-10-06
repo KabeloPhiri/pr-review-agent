@@ -8,6 +8,7 @@ every page checks access first (`auth.current_user`).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Mapping
@@ -64,10 +65,15 @@ def build_console_router(
     source = analytics.CachedSource(trace_source or analytics.mlflow_trace_source())
     templates = _templates()
 
-    def load(days: int) -> tuple[list[analytics.TraceRecord], str | None]:
-        """Traces for the range, or an explanation of why they are missing."""
+    async def load(days: int) -> tuple[list[analytics.TraceRecord], str | None]:
+        """Traces for the range, or an explanation of why they are missing.
+
+        The MLflow query is synchronous network I/O. Run it in a worker
+        thread: on the event loop it would stall every other request this
+        process serves, review API and background reviews included.
+        """
         try:
-            return source.last_days(days), None
+            return await asyncio.to_thread(source.last_days, days), None
         except Exception as exc:
             logger.warning("Console could not read traces", exc_info=True)
             return [], f"Could not read review traces from MLflow: {exc}"
@@ -120,7 +126,7 @@ def build_console_router(
     @guarded
     async def overview_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         prices = _prices()
         return page(
             request,
@@ -137,7 +143,7 @@ def build_console_router(
     @guarded
     async def repositories_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         sort = request.query_params.get("sort", "last_review_ms")
         descending = request.query_params.get("dir", "desc") != "asc"
         rows = analytics.repositories(
@@ -160,7 +166,7 @@ def build_console_router(
     @guarded
     async def reviews_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         return page(
             request,
             "reviews",
@@ -174,7 +180,7 @@ def build_console_router(
     @guarded
     async def config_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         repo_key = _repo_key(repo)
         return page(
             request,
@@ -189,7 +195,7 @@ def build_console_router(
     @guarded
     async def standards_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         store_dir = get_settings_store().standards_dir()
         catalog = standards.discover(store_dir)
         selected = request.query_params.get("name")
@@ -208,7 +214,7 @@ def build_console_router(
     @guarded
     async def prompts_page(request: Request, user: ConsoleUser) -> Response:
         repo, days = common(request)
-        records, error = load(days)
+        records, error = await load(days)
         store = get_settings_store()
         prompts = [
             {

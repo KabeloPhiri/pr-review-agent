@@ -164,3 +164,36 @@ def test_prompts_page_shows_guidance_and_the_fixed_output_format():
 def test_invalid_days_falls_back_to_the_default():
     html = _client().get("/console?days=999", headers=_as(ADMIN)).text
     assert "last 7 days" in html
+
+
+async def test_a_slow_trace_query_does_not_stall_other_requests():
+    """The MLflow query runs in a worker thread, so the review API stays
+    responsive while a console page loads."""
+    import asyncio
+    import time
+
+    import httpx
+
+    def slow_source(start, end):
+        time.sleep(0.8)  # a slow tracking server
+        return RECORDS
+
+    app = FastAPI()
+    app.include_router(build_console_router(JobRunner(InMemoryJobStore()), trace_source=slow_source))
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        started = time.monotonic()
+        page = asyncio.create_task(client.get("/console", headers=_as(ADMIN)))
+        # Let the console request reach the query. If the query blocked the
+        # event loop, this sleep could not even return until it finished.
+        await asyncio.sleep(0.1)
+        assert (await client.get("/ping")).status_code == 200
+        ping_seconds = time.monotonic() - started
+        assert (await page).status_code == 200
+
+    assert ping_seconds < 0.5, f"/ping waited {ping_seconds:.2f}s behind the trace query"
