@@ -63,7 +63,7 @@
   {% if data.applies %}
   <div class="kpis">
     {{ kpi("Apply requests", data.applies | num) }}
-    {{ kpi("Applied", data.applied | num) }}
+    {{ kpi("Suggestions applied", data.applied | num, "an /apply all request can apply several") }}
   </div>
   <table class="data narrow">
     <caption>Outcome of each /apply and /apply all request</caption>

@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -333,6 +333,7 @@ def _trace_url(trace_id: str) -> str | None:
     experiment = os.getenv("MLFLOW_EXPERIMENT_ID", "").strip()
     if not host or not experiment or not trace_id:
         return None
-    if not host.startswith("http"):
+    if not host.startswith(("http://", "https://")):
         host = f"https://{host}"
-    return f"{host}/ml/experiments/{experiment}/traces?selectedEvaluationId={trace_id}"
+    query = urlencode({"selectedEvaluationId": trace_id})
+    return f"{host}/ml/experiments/{quote(experiment, safe='')}/traces?{query}"

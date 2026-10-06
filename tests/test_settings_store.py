@@ -58,3 +58,15 @@ def test_default_store_changes_nothing(monkeypatch):
         assert store.repos() == []
     finally:
         set_settings_store(None)
+
+
+@pytest.mark.parametrize(
+    "scm, slug",
+    [
+        ("github", "acme/my__repo"),
+        ("azure_devops", "contoso/data/etl__jobs"),
+    ],
+)
+def test_repo_names_containing_double_underscores_round_trip(scm, slug):
+    key = RepoKey(scm, slug)
+    assert RepoKey.parse(key.path) == key

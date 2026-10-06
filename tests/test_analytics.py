@@ -77,7 +77,7 @@ def test_overview_tokens_per_model_and_day():
 
 def test_overview_apply_outcomes():
     data = analytics.overview(RECORDS)
-    assert (data.applies, data.applied) == (3, 2)
+    assert (data.applies, data.applied) == (3, 4)  # the /apply all applied three
     assert dict(data.apply_outcomes) == {"applied": 2, "no_change_generated": 1}
 
 
@@ -185,3 +185,27 @@ def test_repository_is_derived_from_the_slug_on_older_traces():
     )
     record = analytics.record_from_info(info)
     assert (record.repo, record.pr) == ("github/KabeloPhiri__pr-review-agent", "9")
+
+
+def test_truncation_is_judged_before_the_repository_filter(monkeypatch):
+    monkeypatch.setattr(analytics, "MAX_TRACES", 4)
+    records = [review(A), review(A, t=T0 + 1), review(B), review(B, t=T0 + 2)]
+    assert analytics.overview(records).truncated is True
+    assert analytics.overview(records, repo=A).truncated is True  # was False before
+
+
+def test_applied_counts_agree_between_overview_and_repositories():
+    records = [apply(B, kind=analytics.APPLY_ALL, count=3), apply(B)]
+    assert analytics.overview(records).applied == 4
+    [row] = analytics.repositories(records)
+    assert row.applied == 4
+
+
+def test_a_slug_without_a_pr_number_is_not_grouped():
+    info = SimpleNamespace(
+        trace_id="tr-x", timestamp_ms=T0, execution_duration=1, state="OK",
+        tags={"mlflow.traceName": "pr_review"},
+        trace_metadata={"pr.slug": "not-a-slug", "pr.scm": "github"}, token_usage=None,
+    )
+    record = analytics.record_from_info(info)
+    assert (record.repo, record.pr) == ("", "")
