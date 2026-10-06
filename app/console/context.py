@@ -8,6 +8,7 @@ every page.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping
@@ -62,7 +63,11 @@ class ConsoleContext:
         return repo, days if days in DAY_CHOICES else DEFAULT_DAYS
 
     def load(self, days: int) -> tuple[list[analytics.TraceRecord], str | None]:
-        """Traces for the range, or an explanation of why they are missing."""
+        """Traces for the range, or an explanation of why they are missing.
+
+        Synchronous: it runs inside the worker thread `guarded` gives every
+        console handler, never on the server's event loop.
+        """
         try:
             return self.source.last_days(days), None
         except Exception as exc:
@@ -104,7 +109,14 @@ class ConsoleContext:
 
     def guarded(self, handler: Handler, *, edit: bool = False):
         """Check access before `handler`. `edit=True`: admins only, same-origin
-        only (a cross-site form post is refused), and a store must exist."""
+        only (a cross-site form post is refused), and a store must exist.
+
+        The handler then runs on its own event loop in a worker thread. Console
+        pages do blocking I/O throughout — the MLflow trace query, volume reads
+        and writes, the model test — and this process also serves `/review`
+        and runs background reviews. Isolating the whole handler here means no
+        console page, present or future, can stall them.
+        """
 
         async def wrapper(request: Request) -> Response:
             try:
@@ -113,17 +125,25 @@ class ConsoleContext:
                 return self.templates.TemplateResponse(
                     request, "forbidden.html", {"email": denied.email}, status_code=403
                 )
-            if edit:
-                problem = _edit_refusal(request, user)
-                if problem:
-                    return self.page(
-                        request, "message", user, status_code=403, title="Not allowed",
-                        message=problem, active="",
-                    )
-            return await handler(request, user)
+            # Read the body on the server's loop; Starlette caches it, so the
+            # handler's own `await request.body()` needs no I/O on its loop.
+            await request.body()
+            return await asyncio.to_thread(asyncio.run, self._dispatch(handler, request, user, edit))
 
         wrapper.__name__ = handler.__name__
         return wrapper
+
+    async def _dispatch(
+        self, handler: Handler, request: Request, user: ConsoleUser, edit: bool
+    ) -> Response:
+        if edit:
+            problem = _edit_refusal(request, user)
+            if problem:
+                return self.page(
+                    request, "message", user, status_code=403, title="Not allowed",
+                    message=problem, active="",
+                )
+        return await handler(request, user)
 
 
 def _edit_refusal(request: Request, user: ConsoleUser) -> str | None:
