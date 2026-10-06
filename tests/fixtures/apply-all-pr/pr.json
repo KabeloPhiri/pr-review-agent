@@ -1,0 +1,9 @@
+{
+  "title": "Fix a flagged line",
+  "description": "",
+  "author": "dev@example.com",
+  "source_branch": "refs/heads/feature/apply-demo",
+  "target_branch": "refs/heads/main",
+  "source_commit": "cccc3333",
+  "target_commit": "dddd4444"
+}

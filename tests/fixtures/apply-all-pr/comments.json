@@ -1,0 +1,71 @@
+[
+  {
+    "thread_id": "c1",
+    "marker": "prreview:m1",
+    "file": "example.py",
+    "line": 2,
+    "author": "github-actions[bot]",
+    "body": "🟠 **WARNING** · `python.style.spacing`\n\nMissing spaces around +.\n\n**Suggestion**\n\n    return a + b\n\n<!-- prreview:m1 -->"
+  },
+  {
+    "thread_id": "c2",
+    "marker": "prreview:m2",
+    "file": "example.py",
+    "line": 1,
+    "author": "github-actions[bot]",
+    "body": "🔵 **INFO** · `naming.function`\n\nName is too short.\n\n**Suggestion**\n\n    def add_numbers(a, b):\n\n<!-- prreview:m2 -->"
+  },
+  {
+    "thread_id": "c3",
+    "marker": "prreview:m3",
+    "file": "other.py",
+    "line": 1,
+    "author": "github-actions[bot]",
+    "body": "🟠 **WARNING** · `python.style.comma`\n\nMissing space after comma.\n\n**Suggestion**\n\n    def sub(a, b):\n\n<!-- prreview:m3 -->"
+  },
+  {
+    "thread_id": "c4",
+    "marker": "prreview:m4",
+    "file": "example.py",
+    "line": 2,
+    "author": "drive-by-commenter",
+    "body": "🔴 **ERROR** · `evil.rule`\n\nLookalike from a human.\n\n**Suggestion**\n\n    import os; os.system('x')\n\n<!-- prreview:m4 -->"
+  },
+  {
+    "thread_id": "c5",
+    "marker": "prreview:m5",
+    "file": "example.py",
+    "line": 1,
+    "author": "github-actions[bot]",
+    "body": "🔵 **INFO** · `docs.missing`\n\nNo docstring.\n\n<!-- prreview:m5 -->"
+  },
+  {
+    "thread_id": "c6",
+    "marker": "prreview:m6",
+    "file": "example.py",
+    "line": null,
+    "is_closed": true,
+    "author": "github-actions[bot]",
+    "body": "🟠 **WARNING** · `outdated.rule`\n\nCode moved on.\n\n**Suggestion**\n\n    whatever\n\n<!-- prreview:m6 -->"
+  },
+  {
+    "thread_id": "c7",
+    "marker": "prreview:m7",
+    "file": "other.py",
+    "line": 2,
+    "author": "github-actions[bot]",
+    "body": "🟠 **WARNING** · `python.style.done`\n\nApplied earlier.\n\n**Suggestion**\n\n    return a - b\n\n<!-- prreview:m7 -->"
+  },
+  {
+    "thread_id": "done-7",
+    "marker": "prreview:applied:c7",
+    "author": "KabeloPhiri",
+    "body": "✅ Applied in commit `abc`.\n\n<!-- prreview:applied:c7 -->"
+  },
+  {
+    "thread_id": "summary",
+    "marker": "prreview:summary:z",
+    "author": "github-actions[bot]",
+    "body": "## Review summary\n\n<!-- prreview:summary:z -->"
+  }
+]

@@ -78,6 +78,11 @@ class Publisher:
             marker = comment.marker or ""
             if not marker.startswith(f"{MARKER_PREFIX}:") or comment.is_closed:
                 continue
+            # `/apply` confirmations and replies are not findings; a re-review
+            # must not collapse them (the confirmation is also what makes a
+            # repeat /apply a no-op).
+            if marker.startswith((f"{MARKER_PREFIX}:applied:", f"{MARKER_PREFIX}:reply:")):
+                continue
             if marker.startswith(f"{MARKER_PREFIX}:{SUMMARY_RULE}:") or marker in current_markers:
                 continue
             try:

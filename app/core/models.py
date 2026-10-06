@@ -186,6 +186,13 @@ class ExistingComment(BaseModel):
     is_closed: bool = False
     file: str | None = None
     line: int | None = None
+    #: Filled where the connector has them for free; `/apply all` needs them
+    #: to rebuild each suggestion, the idempotency scan does not.
+    body: str = ""
+    author: str = ""
+    #: Provider-native id for `get_comment`/`reply_to_comment` (GitHub's
+    #: plain REST id), as opposed to `thread_id`.
+    comment_id: str | None = None
 
 
 class SourceComment(BaseModel):
@@ -244,4 +251,25 @@ class ApplyResult(BaseModel):
     commit_sha: str | None = None
     #: Post-push follow-ups (confirmation comment, resolving the thread) that
     #: failed. The commit is already on the branch, so these do not fail it.
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SkippedSuggestion(BaseModel):
+    comment_id: str
+    reason: str
+
+
+class BulkApplyResult(BaseModel):
+    """Outcome of `/apply all`: every open bot suggestion, one commit per file.
+
+    `reason` is set only when the whole request was refused (disabled, wrong
+    requester, nothing to apply); per-suggestion outcomes are in `skipped`.
+    """
+
+    ref: PullRequestRef
+    applied: bool
+    reason: str | None = None
+    applied_comment_ids: list[str] = Field(default_factory=list)
+    commit_shas: list[str] = Field(default_factory=list)
+    skipped: list[SkippedSuggestion] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

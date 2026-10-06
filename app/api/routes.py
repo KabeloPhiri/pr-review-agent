@@ -5,19 +5,22 @@ Mounted on the MLflow `AgentServer` FastAPI app:
     POST /review            run a review (sync, async, or auto)
     GET  /review/{job_id}   poll a background review
     POST /apply             accept one bot suggestion and push it as a commit
-    GET  /apply/{job_id}    poll a background apply
+    POST /apply/all         accept every open bot suggestion (one commit per file)
+    GET  /apply/{job_id}    poll a background apply (single or all)
     POST /config/effective  show the configuration a review would use
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.api.auth import token_from_request
 from app.api.schemas import (
+    ApplyAllRequest,
     ApplyRequest,
     ApplyResponse,
     ConfigRequest,
@@ -28,7 +31,7 @@ from app.api.schemas import (
 )
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
-from app.core.models import ApplyResult, ReviewResult
+from app.core.models import ApplyResult, BulkApplyResult, RepoRef, ReviewResult
 from app.core.pipeline import ReviewPipeline
 from app.services.apply import known_appliers
 from app.services.policy import standards
@@ -95,28 +98,23 @@ def build_router(runner: JobRunner) -> APIRouter:
                 overrides=body.config,
             )
 
-        if body.mode is ReviewMode.SYNC:
-            logger.info("Applying a suggestion on %s synchronously", ref.slug())
-            return ApplyResponse.completed(await work())
+        return await _run_apply(runner, ref, body, work, "a suggestion")
 
-        job = await runner.submit(ref.slug(), work)
-        logger.info("Queued apply %s for %s (mode=%s)", job.job_id, ref.slug(), body.mode.value)
+    @router.post("/apply/all", response_model=ApplyResponse)
+    async def apply_all(body: ApplyAllRequest, request: Request):
+        ref = body.to_ref()
+        token = token_from_request(request, body.scm_token)
 
-        if body.mode is ReviewMode.ASYNC:
-            return _accepted(job, ApplyResponse)
-
-        finished = await runner.wait_for(job.job_id, timeout=_sync_wait(body))
-        if finished and finished.status is JobStatus.COMPLETED:
-            return ApplyResponse.from_job(finished)
-        if finished and finished.status is JobStatus.FAILED:
-            return JSONResponse(
-                status_code=500, content=ApplyResponse.from_job(finished).model_dump()
+        async def work():
+            return await pipeline.apply_all(
+                ref, scm_token=token, requester=body.requester, overrides=body.config
             )
-        return _accepted(finished or job, ApplyResponse)
+
+        return await _run_apply(runner, ref, body, work, "all suggestions")
 
     @router.get("/apply/{job_id}", response_model=ApplyResponse)
     async def get_apply(job_id: str):
-        return await _poll(runner, job_id, ApplyResponse, ApplyResult)
+        return await _poll(runner, job_id, ApplyResponse, (ApplyResult, BulkApplyResult))
 
     @router.post("/config/effective", response_model=ConfigResponse)
     async def effective_config(body: ConfigRequest, request: Request):
@@ -147,7 +145,38 @@ def build_router(runner: JobRunner) -> APIRouter:
     return router
 
 
-async def _poll(runner: JobRunner, job_id: str, response_cls: type, result_cls: type):
+async def _run_apply(
+    runner: JobRunner,
+    ref: RepoRef,
+    body: ApplyRequest | ApplyAllRequest,
+    work: Callable[[], Awaitable[ApplyResult | BulkApplyResult]],
+    what: str,
+) -> ApplyResponse | JSONResponse:
+    """sync / async / auto handling shared by both apply routes."""
+    if body.mode is ReviewMode.SYNC:
+        logger.info("Applying %s on %s synchronously", what, ref.slug())
+        return ApplyResponse.completed(await work())
+
+    job = await runner.submit(ref.slug(), work)
+    logger.info("Queued apply %s for %s (mode=%s)", job.job_id, ref.slug(), body.mode.value)
+
+    if body.mode is ReviewMode.ASYNC:
+        return _accepted(job, ApplyResponse)
+
+    finished = await runner.wait_for(job.job_id, timeout=_sync_wait(body))
+    if finished and finished.status is JobStatus.COMPLETED:
+        return ApplyResponse.from_job(finished)
+    if finished and finished.status is JobStatus.FAILED:
+        return JSONResponse(status_code=500, content=ApplyResponse.from_job(finished).model_dump())
+    return _accepted(finished or job, ApplyResponse)
+
+
+async def _poll(
+    runner: JobRunner,
+    job_id: str,
+    response_cls: type,
+    result_cls: type | tuple[type, ...],
+):
     """Shared by both poll routes; reviews and applies share one job store."""
     job = await runner.store.get(job_id)
     if job is None or (job.result is not None and not isinstance(job.result, result_cls)):

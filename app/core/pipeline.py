@@ -16,16 +16,19 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
-from app.core.errors import ReviewerError, ScmConflictError, ScmError
+from app.core.errors import PrReviewError, ReviewerError, ScmConflictError, ScmError
 from app.core.models import (
     ApplyResult,
+    BulkApplyResult,
     CommentDraft,
     Diff,
+    ExistingComment,
     Finding,
     PullRequest,
     PullRequestRef,
     ReviewResult,
     Severity,
+    SkippedSuggestion,
 )
 from app.services.apply import get_applier
 from app.services.policy import gate, standards
@@ -37,6 +40,24 @@ from app.services.review.chunking import build_chunks
 from app.services.scm import ScmConnector, get_connector
 
 logger = logging.getLogger(__name__)
+
+#: How many times `apply()` re-reads the branch and regenerates a fix when the
+#: push is refused because the file changed meanwhile — typically another
+#: `/apply` on the same file landing first.
+APPLY_MAX_ATTEMPTS = 3
+
+#: What the bot says in the suggestion's thread when it does not apply it.
+#: Only for refusals after the requester and comment are verified — replying
+#: to arbitrary commenters would let anyone make the bot post.
+_NOT_APPLIED_REPLIES = {
+    "no_change_generated": (
+        "ℹ️ Not applied: no change was needed — this may already be fixed on the branch."
+    ),
+    "file_changed_since_review": (
+        "⚠️ Not applied: the file kept changing while this fix was being prepared "
+        f"({APPLY_MAX_ATTEMPTS} attempts). Reply `/apply` again once other pushes settle."
+    ),
+}
 
 
 class ReviewPipeline:
@@ -122,68 +143,39 @@ class ReviewPipeline:
             )
             _tag_trace(pr, config)
 
-            if not config.allow_apply_fixes:
-                return ApplyResult(ref=ref, applied=False, reason="apply_fixes_disabled")
-            if requester != pr.author:
-                return ApplyResult(ref=ref, applied=False, reason="unauthorized_requester")
-            if pr.is_fork:
-                return ApplyResult(ref=ref, applied=False, reason="fork_pull_request_unsupported")
+            refusal = _apply_refusal(config, pr, requester)
+            if refusal is not None:
+                return ApplyResult(ref=ref, applied=False, reason=refusal)
 
             source = await scm.get_comment(pr, comment_id)
             if source is None or source.file is None:
                 return ApplyResult(
                     ref=ref, applied=False, reason="comment_not_found_or_unsupported"
                 )
-            # The rendered format is public, so anyone can paste a lookalike
-            # comment; only the identity that posts reviews is trusted.
-            if source.author not in config.apply_trusted_authors:
+            finding = _bot_finding(config, source.author, source.body, source.file, source.line)
+            if finding is None:
                 return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
 
-            parsed = parse_finding_comment(source.body)
-            if parsed is None:
-                return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
-
-            # Keyed by the accepted comment, so a second `/apply` or a
-            # redelivered webhook cannot apply the same fix twice.
-            applied_marker = f"prreview:applied:{comment_id}"
-            if any(c.marker == applied_marker for c in await scm.list_comments(pr)):
+            # Keyed by the accepted comment, so a second `/apply` (or one
+            # after `/apply all`) or a redelivered webhook cannot apply twice.
+            applied_marker = _applied_marker(comment_id)
+            if _already_applied(await scm.list_comments(pr), comment_id):
                 return ApplyResult(ref=ref, applied=False, reason="already_applied")
-
-            finding = Finding(
-                file=source.file,
-                line=source.line,
-                severity=Severity(parsed["severity"]),
-                rule_id=parsed["rule_id"],
-                message=parsed["message"],
-                suggestion=parsed["suggestion"],
-            )
-
-            current_text = await scm.get_file_text(pr, source.file)
-            if current_text is None:
-                raise ScmError(f"Could not read the current content of {source.file}")
 
             applier = get_applier(config.applier, config)
             try:
-                new_content = await applier.generate_patch(
-                    file=source.file, current_text=current_text, finding=finding
+                commit_sha, reason = await self._push_fix(scm, ref, pr, applier, [finding])
+            except PrReviewError as exc:
+                # Without this the only trace of a failure is a red Actions run.
+                await _reply_quietly(
+                    scm, pr, comment_id, f"❌ Could not apply this suggestion: {exc.message}"
                 )
+                raise
             finally:
                 await applier.aclose()
-
-            if not new_content or new_content == current_text:
-                return ApplyResult(ref=ref, applied=False, reason="no_change_generated")
-
-            try:
-                commit_sha = await scm.update_file(
-                    pr,
-                    source.file,
-                    new_content,
-                    message=f"Apply AI review suggestion ({finding.rule_id}) on {source.file}",
-                )
-            except ScmConflictError:
-                # The branch changed this file after `pr` was read; pushing a
-                # patch of the older content would revert those changes.
-                return ApplyResult(ref=ref, applied=False, reason="file_changed_since_review")
+            if reason is not None:
+                await _reply_quietly(scm, pr, comment_id, _NOT_APPLIED_REPLIES[reason])
+                return ApplyResult(ref=ref, applied=False, reason=reason)
 
             # The commit is on the branch now. Anything below failing is a
             # warning, not a failure — reporting a landed fix as failed only
@@ -218,6 +210,175 @@ class ReviewPipeline:
             )
         finally:
             await scm.aclose()
+
+    @mlflow.trace(name="pr_apply_all")
+    async def apply_all(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None = None,
+        requester: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> BulkApplyResult:
+        """Accept every open bot suggestion on the pull request at once.
+
+        Same gates as `apply()`. Suggestions are grouped by file and each file
+        gets one model call and one commit, so fixes in the same file cannot
+        collide the way simultaneous single `/apply` replies can. A file that
+        fails is reported in `skipped` and the others still land; only when
+        nothing could be applied because of a real failure does this raise.
+        """
+        _redact_trace_inputs(ref, overrides, requester=requester, apply_all=True)
+        scm = get_connector(ref.scm, token=scm_token)
+        try:
+            pr = await scm.get_pull_request(ref)
+            # Target branch, as in `apply()`: a PR cannot opt itself in.
+            config = await self.resolve_config(
+                scm, pr.model_copy(update={"source_commit": pr.target_commit}), overrides
+            )
+            _tag_trace(pr, config)
+
+            refusal = _apply_refusal(config, pr, requester)
+            if refusal is not None:
+                return BulkApplyResult(ref=ref, applied=False, reason=refusal)
+
+            comments = await scm.list_comments(pr)
+            by_file: dict[str, list[tuple[ExistingComment, Finding]]] = {}
+            skipped: list[SkippedSuggestion] = []
+            for comment in comments:
+                # Inline, still anchored (GitHub drops the line once the code
+                # moved on), and one of the bot's findings with a suggestion.
+                if comment.is_closed or not (comment.file and comment.comment_id):
+                    continue
+                finding = _bot_finding(
+                    config, comment.author, comment.body, comment.file, comment.line
+                )
+                if finding is None or not finding.suggestion:
+                    continue
+                if _already_applied(comments, comment.comment_id):
+                    skipped.append(
+                        SkippedSuggestion(comment_id=comment.comment_id, reason="already_applied")
+                    )
+                    continue
+                by_file.setdefault(comment.file, []).append((comment, finding))
+
+            if not by_file:
+                return BulkApplyResult(
+                    ref=ref, applied=False, reason="nothing_to_apply", skipped=skipped
+                )
+
+            applied: list[tuple[ExistingComment, Finding, str]] = []
+            commit_shas: list[str] = []
+            last_error: PrReviewError | None = None
+            applier = get_applier(config.applier, config)
+            try:
+                for file, items in by_file.items():
+                    try:
+                        commit_sha, reason = await self._push_fix(
+                            scm, ref, pr, applier, [finding for _, finding in items]
+                        )
+                    except PrReviewError as exc:
+                        logger.warning("/apply all failed on %s", file, exc_info=True)
+                        last_error = exc
+                        commit_sha, reason = None, f"failed: {exc.message}"
+                    if commit_sha is None:
+                        skipped += [
+                            SkippedSuggestion(comment_id=c.comment_id, reason=reason)
+                            for c, _ in items
+                        ]
+                        continue
+                    commit_shas.append(commit_sha)
+                    applied += [(c, f, commit_sha) for c, f in items]
+                    # The next file is read at the new head.
+                    pr = await scm.get_pull_request(ref)
+            finally:
+                await applier.aclose()
+
+            if not applied and last_error is not None:
+                raise last_error
+
+            warnings: list[str] = []
+            if applied:
+                try:
+                    await scm.post_comment(pr, _bulk_confirmation(applied, skipped))
+                except ScmError as exc:
+                    logger.warning("Applied %d fixes but could not confirm", len(applied))
+                    warnings.append(f"could not post the confirmation comment ({exc.message})")
+                for comment, _, _ in applied:
+                    try:
+                        await scm.close_comment(pr, comment.thread_id)
+                    except ScmError as exc:
+                        warnings.append(f"could not resolve {comment.thread_id} ({exc.message})")
+
+            return BulkApplyResult(
+                ref=ref,
+                applied=bool(applied),
+                reason=None if applied else "no_change_generated",
+                applied_comment_ids=[c.comment_id for c, _, _ in applied],
+                commit_shas=commit_shas,
+                skipped=skipped,
+                warnings=warnings,
+            )
+        finally:
+            await scm.aclose()
+
+    async def _push_fix(
+        self,
+        scm: ScmConnector,
+        ref: PullRequestRef,
+        pr: PullRequest,
+        applier: Any,
+        findings: list[Finding],
+    ) -> tuple[str, None] | tuple[None, str]:
+        """Fix `findings` (all in one file) in one commit: `(commit_sha, None)`
+        or `(None, reason)`.
+
+        A push is refused (`ScmConflictError`) when the file changed after
+        `pr` was read — usually another `/apply` on the same file. Pushing
+        the stale patch would revert that change, so re-read the branch and
+        regenerate from the new content instead; several `/apply` replies in
+        quick succession then land one after another rather than all but
+        one being refused.
+        """
+        file = findings[0].file
+        rules = ", ".join(dict.fromkeys(f.rule_id for f in findings))
+        message = (
+            f"Apply AI review suggestion ({rules}) on {file}"
+            if len(findings) == 1
+            else f"Apply {len(findings)} AI review suggestions on {file}\n\nRules: {rules}"
+        )
+        for attempt in range(1, APPLY_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                pr = await scm.get_pull_request(ref)
+            current_text = await scm.get_file_text(pr, file)
+            if current_text is None:
+                raise ScmError(f"Could not read the current content of {file}")
+
+            if len(findings) == 1:
+                new_content = await applier.generate_patch(
+                    file=file, current_text=current_text, finding=findings[0]
+                )
+            else:
+                new_content = await applier.generate_patch_many(
+                    file=file, current_text=current_text, findings=findings
+                )
+            if new_content:
+                new_content = _match_line_endings(current_text, new_content)
+            if not new_content or new_content == current_text:
+                return None, "no_change_generated"
+
+            try:
+                commit_sha = await scm.update_file(pr, file, new_content, message=message)
+                return commit_sha, None
+            except ScmConflictError:
+                logger.info(
+                    "%s changed while applying %s (attempt %d/%d)",
+                    file,
+                    rules,
+                    attempt,
+                    APPLY_MAX_ATTEMPTS,
+                )
+        return None, "file_changed_since_review"
 
     # -- steps ------------------------------------------------------------
 
@@ -283,6 +444,94 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
         merged.append(finding)
     merged.sort(key=lambda f: (f.file, f.line if f.line is not None else -1, -f.severity.rank))
     return merged
+
+
+def _apply_refusal(config: EffectiveConfig, pr: PullRequest, requester: str) -> str | None:
+    """The request-level gates every apply shares, or None when it may go on."""
+    if not config.allow_apply_fixes:
+        return "apply_fixes_disabled"
+    if requester != pr.author:
+        return "unauthorized_requester"
+    if pr.is_fork:
+        return "fork_pull_request_unsupported"
+    return None
+
+
+def _bot_finding(
+    config: EffectiveConfig, author: str, body: str, file: str, line: int | None
+) -> Finding | None:
+    """Rebuild the `Finding` behind one of the bot's own comments, or None.
+
+    The rendered format is public, so anyone can paste a lookalike comment;
+    only the identity that posts reviews is trusted.
+    """
+    if author not in config.apply_trusted_authors:
+        return None
+    parsed = parse_finding_comment(body)
+    if parsed is None:
+        return None
+    return Finding(
+        file=file,
+        line=line,
+        severity=Severity(parsed["severity"]),
+        rule_id=parsed["rule_id"],
+        message=parsed["message"],
+        suggestion=parsed["suggestion"],
+    )
+
+
+def _applied_marker(comment_id: str) -> str:
+    return f"prreview:applied:{comment_id}"
+
+
+def _already_applied(comments: list[ExistingComment], comment_id: str) -> bool:
+    """A single /apply confirmation carries one marker; an `/apply all`
+    summary carries one per suggestion in its body, so check both."""
+    marker = _applied_marker(comment_id)
+    return any(c.marker == marker or f"<!-- {marker} -->" in c.body for c in comments)
+
+
+def _bulk_confirmation(
+    applied: list[tuple[ExistingComment, Finding, str]], skipped: list[SkippedSuggestion]
+) -> CommentDraft:
+    commits = list(dict.fromkeys(sha for _, _, sha in applied))
+    lines = [
+        f"✅ Applied {len(applied)} suggestion(s) in {len(commits)} commit(s):",
+        "",
+    ]
+    for _, finding, sha in applied:
+        where = f"{finding.file}:{finding.line}" if finding.line else finding.file
+        lines.append(f"- `{finding.rule_id}` on `{where}` → `{sha[:12]}`")
+    if skipped:
+        lines += ["", f"Not applied ({len(skipped)}):", ""]
+        lines += [f"- comment {s.comment_id}: {s.reason}" for s in skipped]
+    lines.append("")
+    lines += [f"<!-- {_applied_marker(c.comment_id)} -->" for c, _, _ in applied]
+    return CommentDraft(body="\n".join(lines), marker=_applied_marker(applied[0][0].comment_id))
+
+
+def _match_line_endings(original: str, new: str) -> str:
+    """Give the model's output the original file's newline style and final
+    newline. Models answer in plain `\n`; pushing that into a CRLF file turns a
+    one-line fix into a whole-file rewrite, which also outdates every other
+    review comment on the file."""
+    new = new.replace("\r\n", "\n")
+    if original.endswith("\n"):
+        if not new.endswith("\n"):
+            new += "\n"
+    else:
+        new = new.rstrip("\n")
+    if "\r\n" in original:
+        new = new.replace("\n", "\r\n")
+    return new
+
+
+async def _reply_quietly(scm: ScmConnector, pr: PullRequest, comment_id: str, body: str) -> None:
+    """Best effort: a reply that fails to post must not change the outcome."""
+    try:
+        await scm.reply_to_comment(pr, comment_id, body)
+    except Exception:
+        logger.warning("Could not reply on comment %s", comment_id, exc_info=True)
 
 
 def _redact_trace_inputs(

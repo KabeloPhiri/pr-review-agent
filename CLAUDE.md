@@ -168,7 +168,16 @@ cannot opt itself in. `update_file` sends the blob sha at `pr.source_commit`
 (what the patch was derived from) so GitHub 409s — `ScmConflictError` — if the
 author pushed to that file meanwhile. Pushes made with Actions' `GITHUB_TOKEN`
 do not trigger workflows, which is why `pr-apply.yml` uses its own
-`PR_REVIEW_APPLY_TOKEN`. Apply jobs are polled at `GET /apply/{job_id}`. `ScmConnector.update_file`/`get_comment`
+`PR_REVIEW_APPLY_TOKEN`. Apply jobs are polled at `GET /apply/{job_id}`.
+`_push_fix` retries a 409 up to `APPLY_MAX_ATTEMPTS` by re-reading the PR and
+regenerating, and `_match_line_endings` restores the file's newline style —
+model output is LF. `apply_all()` (`POST /apply/all`) shares the gates via
+`_apply_refusal`/`_bot_finding`, groups suggestions per file, and calls
+`Applier.generate_patch_many` (one model call per file in `llm`; the base
+class chains `generate_patch`). Its summary comment embeds one
+`prreview:applied:<id>` marker per suggestion, so `_already_applied` checks
+comment bodies as well as markers; the publisher never auto-resolves
+`prreview:applied:`/`prreview:reply:` comments. `ScmConnector.update_file`/`get_comment`
 default to unsupported (raise / return `None`); only `github.py` and
 `fake.py` implement them today. Testing the pushed commit is deliberately not
 this app's job — it relies on the push re-triggering whatever CI already

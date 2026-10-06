@@ -73,6 +73,14 @@ class ScmConnector(ABC):
         """Mark a thread resolved. Optional: connectors may no-op."""
         return None
 
+    async def reply_to_comment(self, pr: PullRequest, comment_id: str, body: str) -> None:
+        """Answer in the thread of the comment `comment_id` (the same id
+        `get_comment` takes). Connectors without threaded replies fall back to
+        a pull-request-level comment, so the answer is still visible."""
+        await self.post_comment(
+            pr, CommentDraft(body=body, marker=f"prreview:reply:{comment_id}")
+        )
+
     async def update_file(
         self, pr: PullRequest, path: str, new_content: str, message: str
     ) -> str:

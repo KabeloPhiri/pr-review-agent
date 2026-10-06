@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import EffectiveConfig
 from app.core.jobs import Job, JobStatus
-from app.core.models import ApplyResult, PullRequestRef, ReviewResult
+from app.core.models import ApplyResult, BulkApplyResult, PullRequestRef, ReviewResult
 
 
 class ReviewMode(str, Enum):
@@ -86,10 +86,16 @@ class ApplyRequest(ReviewRequest):
     requester: str
 
 
+class ApplyAllRequest(ReviewRequest):
+    """`/apply all`: every open bot suggestion on the pull request."""
+
+    requester: str
+
+
 class ApplyResponse(BaseModel):
     status: str = Field(description="completed | queued | running | failed")
     job_id: str | None = None
-    result: ApplyResult | None = None
+    result: ApplyResult | BulkApplyResult | None = None
     error: str | None = None
 
     @classmethod
@@ -102,7 +108,7 @@ class ApplyResponse(BaseModel):
         )
 
     @classmethod
-    def completed(cls, result: ApplyResult) -> "ApplyResponse":
+    def completed(cls, result: ApplyResult | BulkApplyResult) -> "ApplyResponse":
         return cls(status=JobStatus.COMPLETED.value, result=result)
 
 

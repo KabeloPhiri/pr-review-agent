@@ -2,6 +2,7 @@ import pytest
 
 from app.core.config import resolve
 from app.core.models import (
+    CommentDraft,
     Finding,
     GateLevel,
     PullRequest,
@@ -176,6 +177,17 @@ async def test_publish_closes_threads_for_resolved_findings(pr):
     await publisher.publish(pr, _result([], passed=True))
     assert scm.closed  # the stale inline thread was resolved
     assert scm.status is not None
+
+
+async def test_publish_leaves_apply_confirmations_and_replies_alone(pr):
+    """A re-review after /apply must not collapse the bot's own confirmation."""
+    scm = FakeScmConnector()
+    for marker in ("prreview:applied:501", "prreview:reply:501"):
+        await scm.post_comment(pr, CommentDraft(body="x", marker=marker))
+    stale = await scm.post_comment(pr, CommentDraft(body="x", marker="prreview:stale1234"))
+    await Publisher(scm, resolve()).publish(pr, _result([], passed=True))
+    # Only the stale finding is closed; the confirmation and reply stay open.
+    assert scm.closed == [stale.id]
 
 
 async def test_post_comments_disabled_still_sets_status(pr):

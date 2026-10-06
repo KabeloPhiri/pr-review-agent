@@ -79,7 +79,8 @@ review.
 | `POST /review` | Run a review. `mode`: `auto` (default), `sync`, `async` |
 | `GET /review/{job_id}` | Poll a background review |
 | `POST /apply` | Accept one bot suggestion and push it as a commit (opt-in; see below) |
-| `GET /apply/{job_id}` | Poll a background apply |
+| `POST /apply/all` | Accept every open bot suggestion on the PR (one commit per file) |
+| `GET /apply/{job_id}` | Poll a background apply (single or all) |
 | `POST /config/effective` | Show the configuration a review would use |
 | `POST /invocations` | MLflow agent entry point; always synchronous |
 | `GET /health` | Health check (from the MLflow agent server) |
@@ -145,6 +146,23 @@ workflow's `GITHUB_TOKEN`**. GitHub does not start workflows for pushes made
 with `GITHUB_TOKEN`, so `pr-apply.yml` pushes with a separate
 `PR_REVIEW_APPLY_TOKEN` secret (a machine-user fine-grained PAT, or a GitHub
 App token). Nothing here polls a build or reports pass/fail back.
+
+**Several suggestions.** Replying `/apply` on several comments works: if two
+land on the same file at once, the second is retried against the new branch
+state (up to 3 times) rather than refused. To take everything at once,
+comment **`/apply all`** on the pull request, or reply it in any bot thread.
+Open bot suggestions are grouped by file, each file gets one model call with
+all of its suggestions, and each file becomes one commit. The bot posts one
+summary of what was applied and what was skipped and why, and resolves the
+applied threads. Skipped without comment: lookalikes not written by
+`apply_trusted_authors`, findings with no suggestion, and outdated comments
+(GitHub drops the line once the code moved on). The PR-level comment form
+needs `pr-apply.yml` on the default branch — GitHub runs `issue_comment`
+workflows from there — while the in-thread reply works from the PR's copy.
+
+Whenever a verified `/apply` is not applied (no change needed, the file kept
+changing) or fails, the bot says so in the suggestion's thread. Fixes keep
+the file's line endings and final newline.
 
 Azure DevOps is not wired up for this yet — it has no clean YAML-only trigger
 for a comment reply, unlike GitHub's `pull_request_review_comment` event.

@@ -151,6 +151,9 @@ class FakeApi:
                 )
             return httpx.Response(201, json={"id": 99, "node_id": "RC_new"})
 
+        if path.endswith("/pulls/42/comments/501/replies") and method == "POST":
+            return httpx.Response(201, json={"id": 502, "node_id": "RC_node502"})
+
         if path.endswith("/issues/42/comments") and method == "POST":
             return httpx.Response(201, json={"id": 100, "node_id": "IC_new"})
 
@@ -447,6 +450,15 @@ async def test_update_file_conflict_is_a_conflict_error(connector, api):
 async def test_get_comment_from_another_pull_request_is_none(connector):
     pr = await connector.get_pull_request(_ref())
     assert await connector.get_comment(pr, "601") is None
+    await connector.aclose()
+
+
+async def test_reply_to_comment_posts_in_the_thread(connector, api):
+    pr = await connector.get_pull_request(_ref())
+    await connector.reply_to_comment(pr, "501", "Not applied")
+
+    request = api.find("/pulls/42/comments/501/replies", method="POST")
+    assert json.loads(request.content) == {"body": "Not applied"}
     await connector.aclose()
 
 
