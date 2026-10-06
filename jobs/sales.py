@@ -15,9 +15,15 @@ def publish_daily_totals(spark: SparkSession, run_date: str) -> None:
         load_sales(spark, run_date)
         .groupBy("store_id")
         .agg(F.sum("amount").alias("total_amount"))
+        .withColumn("sale_date", F.lit(run_date))
     )
     # Replace the day's totals.
-    totals_df.write.mode("overwrite").saveAsTable("gold.daily_store_sales")
+    (
+        totals_df.write.format("delta")
+        .mode("overwrite")
+        .option("replaceWhere", f"sale_date = '{run_date}'")
+        .saveAsTable("gold.daily_store_sales")
+    )
 
 
 #You can export streaming metrics to external services for alerting or dashboarding by using the StreamingQueryListener interface.
