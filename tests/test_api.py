@@ -5,6 +5,8 @@ The routes are mounted on a bare FastAPI app here rather than on the MLflow
 credentials. `app/server.py` mounts the same router.
 """
 
+import time
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -186,10 +188,12 @@ def test_apply_all_can_be_polled_on_the_apply_route(client):
 
     for _ in range(50):
         polled = client.get(f"/apply/{job_id}")
-        if polled.json()["status"] == "completed":
+        if polled.json()["status"] in ("completed", "failed"):
             break
+        time.sleep(0.1)
+    assert polled.json()["status"] == "completed"
     assert polled.status_code == 200
     result = polled.json()["result"]
     # noop changes nothing, so every suggestion is skipped, none applied.
     assert result["applied"] is False
-    assert "applied_comment_ids" in result
+    assert result["applied_comment_ids"] == []
