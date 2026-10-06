@@ -13,6 +13,7 @@ Mounted on the MLflow `AgentServer` FastAPI app:
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -30,7 +31,7 @@ from app.api.schemas import (
 )
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
-from app.core.models import ApplyResult, BulkApplyResult, ReviewResult
+from app.core.models import ApplyResult, BulkApplyResult, RepoRef, ReviewResult
 from app.core.pipeline import ReviewPipeline
 from app.services.apply import known_appliers
 from app.services.policy import standards
@@ -144,7 +145,13 @@ def build_router(runner: JobRunner) -> APIRouter:
     return router
 
 
-async def _run_apply(runner: JobRunner, ref, body: ReviewRequest, work, what: str):
+async def _run_apply(
+    runner: JobRunner,
+    ref: RepoRef,
+    body: ApplyRequest | ApplyAllRequest,
+    work: Callable[[], Awaitable[ApplyResult | BulkApplyResult]],
+    what: str,
+) -> ApplyResponse | JSONResponse:
     """sync / async / auto handling shared by both apply routes."""
     if body.mode is ReviewMode.SYNC:
         logger.info("Applying %s on %s synchronously", what, ref.slug())
@@ -164,7 +171,12 @@ async def _run_apply(runner: JobRunner, ref, body: ReviewRequest, work, what: st
     return _accepted(finished or job, ApplyResponse)
 
 
-async def _poll(runner: JobRunner, job_id: str, response_cls: type, result_cls):
+async def _poll(
+    runner: JobRunner,
+    job_id: str,
+    response_cls: type,
+    result_cls: type | tuple[type, ...],
+):
     """Shared by both poll routes; reviews and applies share one job store."""
     job = await runner.store.get(job_id)
     if job is None or (job.result is not None and not isinstance(job.result, result_cls)):
