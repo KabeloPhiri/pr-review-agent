@@ -17,7 +17,7 @@ def publish_daily_totals(spark: SparkSession, run_date: str) -> None:
         .agg(F.sum("amount").alias("total_amount"))
     )
     # Replace the day's totals.
-    totals_df.write.mode("overwrite").saveAsTable("silver.sales")
+    totals_df.write.mode("overwrite").saveAsTable("gold.daily_store_sales")
 
 
 #You can export streaming metrics to external services for alerting or dashboarding by using the StreamingQueryListener interface.
