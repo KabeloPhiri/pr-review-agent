@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from app.core.errors import ScmConflictError, ScmError
+from app.core.errors import ReviewerError, ScmConflictError, ScmError
 from app.core.models import ExistingComment, PullRequest, PullRequestRef
-from app.core.pipeline import ReviewPipeline
+from app.core.pipeline import APPLY_MAX_ATTEMPTS, ReviewPipeline, _match_line_endings
 from app.services.apply.base import Applier, applier_registry
 from app.services.scm.base import scm_registry
 from app.services.scm.fake import FakeScmConnector
@@ -24,6 +24,24 @@ class StubApplier(Applier):
     async def generate_patch(self, *, file, current_text, finding):
         StubApplier.requested.append(file)
         return current_text.replace("a+b", "a + b")
+
+
+@applier_registry.register("exploding")
+class ExplodingApplier(Applier):
+    name = "exploding"
+
+    async def generate_patch(self, *, file, current_text, finding):
+        raise ReviewerError("Model endpoint 'm' call failed")
+
+
+@applier_registry.register("lf")
+class LfApplier(Applier):
+    """Answers the way a model does: LF newlines and a final newline."""
+
+    name = "lf"
+
+    async def generate_patch(self, *, file, current_text, finding):
+        return current_text.replace("\r\n", "\n").replace("a+b", "a + b") + "\n"
 
 
 @pytest.fixture
@@ -151,8 +169,12 @@ class TrickyScm(FakeScmConnector):
     target_config: str | None = None
     author: str | None = None
     is_fork = False
-    conflict = False
+    #: How many pushes to refuse with a 409 before accepting one.
+    conflicts = 0
     fail_follow_ups = False
+    #: Overrides example.py's content, e.g. to serve CRLF text.
+    file_text: str | None = None
+    pr_reads = 0
     last: "TrickyScm | None" = None
     #: Comments posted by earlier instances — a real PR keeps them between runs.
     remembered: list = []
@@ -162,6 +184,7 @@ class TrickyScm(FakeScmConnector):
         TrickyScm.last = self
 
     async def get_pull_request(self, ref):
+        TrickyScm.pr_reads += 1
         pr = await super().get_pull_request(ref)
         return pr.model_copy(update={"is_fork": TrickyScm.is_fork})
 
@@ -169,6 +192,8 @@ class TrickyScm(FakeScmConnector):
         if path == ".prreview/config.yaml":
             source = pr.source_commit == "cccc3333"
             return TrickyScm.source_config if source else TrickyScm.target_config
+        if path == "example.py" and TrickyScm.file_text is not None:
+            return TrickyScm.file_text
         return await super().get_file_text(pr, path)
 
     async def get_comment(self, pr, comment_id):
@@ -178,7 +203,8 @@ class TrickyScm(FakeScmConnector):
         return comment
 
     async def update_file(self, pr, path, new_content, message):
-        if TrickyScm.conflict:
+        if TrickyScm.conflicts > 0:
+            TrickyScm.conflicts -= 1
             raise ScmConflictError("GitHub returned 409")
         return await super().update_file(pr, path, new_content, message)
 
@@ -212,8 +238,10 @@ def tricky_ref(apply_ref):
         ("target_config", None),
         ("author", None),
         ("is_fork", False),
-        ("conflict", False),
+        ("conflicts", 0),
         ("fail_follow_ups", False),
+        ("file_text", None),
+        ("pr_reads", 0),
     ):
         setattr(TrickyScm, knob, default)
     TrickyScm.remembered = []
@@ -253,11 +281,68 @@ async def test_fork_pull_request_is_not_applied(tricky_ref):
     assert result.reason == "fork_pull_request_unsupported"
 
 
-async def test_branch_moved_since_review_is_a_soft_refusal(tricky_ref):
-    TrickyScm.conflict = True
+async def test_conflict_is_retried_against_the_new_branch_state(tricky_ref):
+    """Another /apply on the same file landed first: re-read, regenerate, push."""
+    TrickyScm.conflicts = 1
+    result = await _apply(tricky_ref, ENABLED)
+    assert result.applied is True
+    assert TrickyScm.pr_reads == 2  # the PR head was re-read before the retry
+    assert len(TrickyScm.last.updated_files) == 1
+
+
+async def test_branch_that_keeps_moving_is_a_soft_refusal_with_a_reply(tricky_ref):
+    TrickyScm.conflicts = 99
     result = await _apply(tricky_ref, ENABLED)
     assert result.applied is False
     assert result.reason == "file_changed_since_review"
+    assert TrickyScm.pr_reads == APPLY_MAX_ATTEMPTS
+    assert TrickyScm.last.updated_files == []
+    [(comment_id, body)] = TrickyScm.last.replies
+    assert comment_id == "comment-1"
+    assert "Not applied" in body and "/apply" in body
+
+
+async def test_no_change_replies_in_the_thread(tricky_ref):
+    result = await _apply(tricky_ref, {"allow_apply_fixes": True, "applier": "noop"})
+    assert result.reason == "no_change_generated"
+    [(_, body)] = TrickyScm.last.replies
+    assert "Not applied" in body
+
+
+async def test_model_failure_replies_in_the_thread_and_still_raises(tricky_ref):
+    with pytest.raises(ReviewerError):
+        await _apply(tricky_ref, {"allow_apply_fixes": True, "applier": "exploding"})
+    [(_, body)] = TrickyScm.last.replies
+    assert "Could not apply" in body
+
+
+async def test_unverified_requests_get_no_reply(tricky_ref):
+    """Anyone can type /apply; only the author's verified requests get answers."""
+    TrickyScm.author = "drive-by-commenter"
+    await _apply(tricky_ref, ENABLED)
+    assert TrickyScm.last.replies == []
+
+
+async def test_crlf_file_keeps_its_line_endings(tricky_ref):
+    """The model answers in LF; pushing that would rewrite every line."""
+    TrickyScm.file_text = "def add(a, b):\r\n    return a+b"
+    result = await _apply(tricky_ref, {"allow_apply_fixes": True, "applier": "lf"})
+    assert result.applied is True
+    [(_, pushed)] = TrickyScm.last.updated_files
+    assert pushed == "def add(a, b):\r\n    return a + b"
+
+
+@pytest.mark.parametrize(
+    "original, new, expected",
+    [
+        ("a\r\nb\r\n", "a\nB\n", "a\r\nB\r\n"),
+        ("a\r\nb", "a\nB\n", "a\r\nB"),  # no final newline stays that way
+        ("a\nb\n", "a\nB", "a\nB\n"),  # a final newline is restored
+        ("a\nb\n", "a\r\nB\r\n", "a\nB\n"),  # LF file stays LF
+    ],
+)
+def test_match_line_endings(original, new, expected):
+    assert _match_line_endings(original, new) == expected
 
 
 async def test_failed_follow_ups_do_not_fail_a_landed_commit(tricky_ref):

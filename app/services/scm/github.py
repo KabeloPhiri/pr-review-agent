@@ -17,6 +17,7 @@ API reference (verified against the 2022-11-28 docs):
 - inline thread: GET/POST {base}/repos/{owner}/{repo}/pulls/{number}/comments
 - one comment:   GET  {base}/repos/{owner}/{repo}/pulls/comments/{comment_id}
 - summary:       GET/POST {base}/repos/{owner}/{repo}/issues/{number}/comments
+- reply:         POST {base}/repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies
 - resolve:       POST {graphql} minimizeComment
 - push a commit: PUT  {base}/repos/{owner}/{repo}/contents/{path}
 - status:        POST {base}/repos/{owner}/{repo}/statuses/{sha}
@@ -417,6 +418,10 @@ class GitHubConnector(ScmConnector):
             "POST", f"{base}/issues/{number}/comments", json={"body": comment.body}
         )
         return f"{_ISSUE_PREFIX}{_node_id(response)}"
+
+    async def reply_to_comment(self, pr: PullRequest, comment_id: str, body: str) -> None:
+        url = f"{self._base(pr.ref)}/pulls/{pr.ref.pull_request_id}/comments/{comment_id}/replies"
+        await self._request("POST", url, json={"body": body})
 
     async def close_comment(self, pr: PullRequest, thread_id: str) -> None:
         """Minimise the comment as RESOLVED.

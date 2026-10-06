@@ -16,7 +16,7 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
-from app.core.errors import ReviewerError, ScmConflictError, ScmError
+from app.core.errors import PrReviewError, ReviewerError, ScmConflictError, ScmError
 from app.core.models import (
     ApplyResult,
     CommentDraft,
@@ -37,6 +37,24 @@ from app.services.review.chunking import build_chunks
 from app.services.scm import ScmConnector, get_connector
 
 logger = logging.getLogger(__name__)
+
+#: How many times `apply()` re-reads the branch and regenerates a fix when the
+#: push is refused because the file changed meanwhile — typically another
+#: `/apply` on the same file landing first.
+APPLY_MAX_ATTEMPTS = 3
+
+#: What the bot says in the suggestion's thread when it does not apply it.
+#: Only for refusals after the requester and comment are verified — replying
+#: to arbitrary commenters would let anyone make the bot post.
+_NOT_APPLIED_REPLIES = {
+    "no_change_generated": (
+        "ℹ️ Not applied: no change was needed — this may already be fixed on the branch."
+    ),
+    "file_changed_since_review": (
+        "⚠️ Not applied: the file kept changing while this fix was being prepared "
+        f"({APPLY_MAX_ATTEMPTS} attempts). Reply `/apply` again once other pushes settle."
+    ),
+}
 
 
 class ReviewPipeline:
@@ -158,32 +176,20 @@ class ReviewPipeline:
                 suggestion=parsed["suggestion"],
             )
 
-            current_text = await scm.get_file_text(pr, source.file)
-            if current_text is None:
-                raise ScmError(f"Could not read the current content of {source.file}")
-
             applier = get_applier(config.applier, config)
             try:
-                new_content = await applier.generate_patch(
-                    file=source.file, current_text=current_text, finding=finding
+                commit_sha, reason = await self._push_fix(scm, ref, pr, applier, finding)
+            except PrReviewError as exc:
+                # Without this the only trace of a failure is a red Actions run.
+                await _reply_quietly(
+                    scm, pr, comment_id, f"❌ Could not apply this suggestion: {exc.message}"
                 )
+                raise
             finally:
                 await applier.aclose()
-
-            if not new_content or new_content == current_text:
-                return ApplyResult(ref=ref, applied=False, reason="no_change_generated")
-
-            try:
-                commit_sha = await scm.update_file(
-                    pr,
-                    source.file,
-                    new_content,
-                    message=f"Apply AI review suggestion ({finding.rule_id}) on {source.file}",
-                )
-            except ScmConflictError:
-                # The branch changed this file after `pr` was read; pushing a
-                # patch of the older content would revert those changes.
-                return ApplyResult(ref=ref, applied=False, reason="file_changed_since_review")
+            if reason is not None:
+                await _reply_quietly(scm, pr, comment_id, _NOT_APPLIED_REPLIES[reason])
+                return ApplyResult(ref=ref, applied=False, reason=reason)
 
             # The commit is on the branch now. Anything below failing is a
             # warning, not a failure — reporting a landed fix as failed only
@@ -218,6 +224,56 @@ class ReviewPipeline:
             )
         finally:
             await scm.aclose()
+
+    async def _push_fix(
+        self,
+        scm: ScmConnector,
+        ref: PullRequestRef,
+        pr: PullRequest,
+        applier: Any,
+        finding: Finding,
+    ) -> tuple[str, None] | tuple[None, str]:
+        """Generate and push the fix: `(commit_sha, None)` or `(None, reason)`.
+
+        A push is refused (`ScmConflictError`) when the file changed after
+        `pr` was read — usually another `/apply` on the same file. Pushing
+        the stale patch would revert that change, so re-read the branch and
+        regenerate from the new content instead; several `/apply` replies in
+        quick succession then land one after another rather than all but
+        one being refused.
+        """
+        for attempt in range(1, APPLY_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                pr = await scm.get_pull_request(ref)
+            current_text = await scm.get_file_text(pr, finding.file)
+            if current_text is None:
+                raise ScmError(f"Could not read the current content of {finding.file}")
+
+            new_content = await applier.generate_patch(
+                file=finding.file, current_text=current_text, finding=finding
+            )
+            if new_content:
+                new_content = _match_line_endings(current_text, new_content)
+            if not new_content or new_content == current_text:
+                return None, "no_change_generated"
+
+            try:
+                commit_sha = await scm.update_file(
+                    pr,
+                    finding.file,
+                    new_content,
+                    message=f"Apply AI review suggestion ({finding.rule_id}) on {finding.file}",
+                )
+                return commit_sha, None
+            except ScmConflictError:
+                logger.info(
+                    "%s changed while applying %s (attempt %d/%d)",
+                    finding.file,
+                    finding.rule_id,
+                    attempt,
+                    APPLY_MAX_ATTEMPTS,
+                )
+        return None, "file_changed_since_review"
 
     # -- steps ------------------------------------------------------------
 
@@ -283,6 +339,30 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
         merged.append(finding)
     merged.sort(key=lambda f: (f.file, f.line if f.line is not None else -1, -f.severity.rank))
     return merged
+
+
+def _match_line_endings(original: str, new: str) -> str:
+    """Give the model's output the original file's newline style and final
+    newline. Models answer in plain `\n`; pushing that into a CRLF file turns a
+    one-line fix into a whole-file rewrite, which also outdates every other
+    review comment on the file."""
+    new = new.replace("\r\n", "\n")
+    if original.endswith("\n"):
+        if not new.endswith("\n"):
+            new += "\n"
+    else:
+        new = new.rstrip("\n")
+    if "\r\n" in original:
+        new = new.replace("\n", "\r\n")
+    return new
+
+
+async def _reply_quietly(scm: ScmConnector, pr: PullRequest, comment_id: str, body: str) -> None:
+    """Best effort: a reply that fails to post must not change the outcome."""
+    try:
+        await scm.reply_to_comment(pr, comment_id, body)
+    except Exception:
+        logger.warning("Could not reply on comment %s", comment_id, exc_info=True)
 
 
 def _redact_trace_inputs(
