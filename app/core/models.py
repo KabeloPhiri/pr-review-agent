@@ -73,6 +73,9 @@ class PullRequest(BaseModel):
     target_commit: str = ""
     url: str | None = None
     is_draft: bool = False
+    #: The source branch lives in a different repository (a fork). Pushing to
+    #: it needs access this app's token does not have, so apply refuses it.
+    is_fork: bool = False
 
 
 class ChangeType(str, Enum):
@@ -185,6 +188,21 @@ class ExistingComment(BaseModel):
     line: int | None = None
 
 
+class SourceComment(BaseModel):
+    """One existing comment fetched by id, body included.
+
+    Richer than `ExistingComment` (which only exists for the idempotency
+    scan): this is what `ReviewPipeline.apply` needs to reconstruct the
+    original `Finding` from the bot's own rendered comment text.
+    """
+
+    thread_id: str
+    body: str
+    file: str | None = None
+    line: int | None = None
+    author: str = ""
+
+
 class Verdict(BaseModel):
     passed: bool
     gate: GateLevel
@@ -208,3 +226,22 @@ class ReviewResult(BaseModel):
         for finding in self.findings:
             counts[finding.severity.value] += 1
         return counts
+
+
+class ApplyResult(BaseModel):
+    """Outcome of accepting one bot suggestion and pushing it as a commit.
+
+    `applied=False` with a `reason` is a soft, expected outcome (disabled by
+    config, wrong requester, stale/foreign comment) — not an error. A real
+    failure (the push itself failing, the model erroring) raises instead, the
+    same asymmetry `ReviewResult`/`ReviewerError` already apply to `run()`.
+    """
+
+    ref: PullRequestRef
+    applied: bool
+    reason: str | None = None
+    file: str | None = None
+    commit_sha: str | None = None
+    #: Post-push follow-ups (confirmation comment, resolving the thread) that
+    #: failed. The commit is already on the branch, so these do not fail it.
+    warnings: list[str] = Field(default_factory=list)

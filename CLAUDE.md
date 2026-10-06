@@ -31,20 +31,22 @@ curl -X POST localhost:8000/review -H 'Content-Type: application/json' -d '{
 ## Architecture
 
 A Databricks App that reviews pull requests. One FastAPI process, built as a
-modular monolith: four plugin families behind ABCs, each with a `Registry` in
+modular monolith: five plugin families behind ABCs, each with a `Registry` in
 `app/core/registry.py`, resolved by name from configuration and imported
 lazily via the `_MODULES` map in each package's `__init__.py`. Nothing outside
-a plugin's own package imports it.
+a plugin's own package imports it — shared cross-cutting helpers (e.g. the
+Databricks model client) live in `app/core/` instead.
 
 ```
 app/server.py          composition root: AgentServer() -> app, routes, lifespan
 app/agent.py           @invoke() handler behind POST /invocations
 app/api/               routes, request/response schemas, SCM-token extraction
 app/core/pipeline.py   the ONLY place that knows the order of operations
-app/core/{config,models,jobs,registry,errors}.py
+app/core/{config,models,jobs,registry,errors,llm_client}.py
 app/services/scm/      ScmConnector: github, azure_devops, fake (+ diffparse)
 app/services/quality/  QualityConnector: noop (SonarQube goes here)
 app/services/review/   Reviewer: llm, plus chunking and prompt assembly
+app/services/apply/    Applier: noop, llm — turns an accepted suggestion into a pushed commit
 app/services/policy/   standards loading + the severity gate
 app/services/publish/  comment rendering and idempotent posting
 app/defaults/          config.yaml and the bundled standards markdown
@@ -141,11 +143,42 @@ not.
 502); one handler in `server.py` turns them into responses. Raise these rather
 than `HTTPException`.
 
+### Accept-and-apply (`POST /apply`)
+
+Opt-in, GitHub-only, PR-author-only: the PR author replies `/apply` on one of
+the bot's own inline comments, and `ReviewPipeline.apply()` reconstructs the
+`Finding` straight from that comment's own rendered text — via
+`formatter.parse_finding_comment()`, the exact inverse of `render_finding()` —
+rather than a second state store. If `render_finding()`'s layout ever changes,
+`parse_finding_comment()` has to change with it; `tests/test_formatter.py`
+guards the round trip.
+
+This follows the same asymmetric failure policy as `run()`, but inverted in
+spirit: every "this wasn't meant for us" case (`allow_apply_fixes` off, wrong
+requester, a fork PR, a comment not written by one of `apply_trusted_authors`,
+already applied, the file changed on the branch since it was read, nothing to
+change) is a *soft* `ApplyResult(applied=False, reason=...)`, not an
+exception — only a real SCM or model failure raises. Once the commit is
+pushed, a failing confirmation comment or thread-resolve is a warning on
+`ApplyResult`, never a failure.
+
+Apply's config is the one exception to the four layers: `apply()` resolves
+`.prreview/config.yaml` from the PR's **target** commit, so a pull request
+cannot opt itself in. `update_file` sends the blob sha at `pr.source_commit`
+(what the patch was derived from) so GitHub 409s — `ScmConflictError` — if the
+author pushed to that file meanwhile. Pushes made with Actions' `GITHUB_TOKEN`
+do not trigger workflows, which is why `pr-apply.yml` uses its own
+`PR_REVIEW_APPLY_TOKEN`. Apply jobs are polled at `GET /apply/{job_id}`. `ScmConnector.update_file`/`get_comment`
+default to unsupported (raise / return `None`); only `github.py` and
+`fake.py` implement them today. Testing the pushed commit is deliberately not
+this app's job — it relies on the push re-triggering whatever CI already
+reviews/tests the pull request.
+
 ### Adding a plugin
 
 Subclass the ABC, decorate with `@<family>_registry.register("name")`, add the
 module to `_MODULES` in that package's `__init__.py`. It becomes selectable as
-`scm:` / `quality:` / `reviewer:` in config, and shows up in
+`scm:` / `quality:` / `reviewer:` / `applier:` in config, and shows up in
 `POST /config/effective`.
 
 Adding an analyzer is **only** a markdown file in `app/defaults/standards/` —
@@ -179,3 +212,8 @@ pinned, so change it deliberately.
 
 `tests/test_pipeline.py` registers a `stub` reviewer to exercise the whole
 pipeline without a model. Use the same trick rather than mocking internals.
+`tests/test_apply.py` does the same for `ReviewPipeline.apply()` with a `stub`
+applier, against `tests/fixtures/apply-pr/` — a separate fixture from
+`sample-pr/` on purpose, so seeding a `comments.json` for apply tests can't
+change `sample-pr/`'s "no existing comments" baseline that the review tests
+rely on.

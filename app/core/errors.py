@@ -30,6 +30,12 @@ class ScmAuthError(ScmError):
     status_code = 401
 
 
+class ScmConflictError(ScmError):
+    """A write was refused because the target changed since it was read."""
+
+    status_code = 409
+
+
 class ReviewerError(PrReviewError):
     """The review model could not be reached."""
 

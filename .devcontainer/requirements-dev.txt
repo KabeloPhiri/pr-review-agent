@@ -1,0 +1,23 @@
+# Dev-container Python tooling. Pin every library; bump deliberately, in its own branch.
+#
+# databricks-connect MUST match the Databricks Runtime of the dev cluster it talks to
+# (major.minor == DBR major.minor, e.g. 17.3.x <-> DBR 17.3 LTS). The pin also fixes the
+# Python version: 17.x requires Python 3.12 exactly, hence the Dockerfile base image.
+# Change this pin (and the base image if needed) when ${var.sparkVersion} in a bundle changes. It also pulls in databricks-sdk, pandas,
+# pyarrow, grpcio - do not pin those separately here.
+#
+# databricks-connect and pyspark cannot coexist in one environment. Bundle projects that
+# run local pyspark unit tests (templates/dab/requirements.txt) use their own .venv:
+#   python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+databricks-connect==17.3.14
+
+# notebooks
+jupyterlab==4.6.4
+ipykernel==7.3.0
+nbformat==5.11.1
+
+# quality / packaging
+pytest==9.1.1
+ruff==0.16.8
+pyyaml==6.0.3
+build==1.6.1

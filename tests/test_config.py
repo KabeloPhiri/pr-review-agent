@@ -13,6 +13,20 @@ def test_defaults_load_from_bundled_yaml():
     # Empty is the "use every standard in app/defaults/standards" default, so
     # dropping a new markdown file in there needs no config change.
     assert config.analyzers == []
+    # Opt-in, defense in depth: the bot pushes code only when a repo sets
+    # both flags, not just one.
+    assert config.allow_apply_fixes is False
+    assert config.applier == "noop"
+
+
+def test_apply_fixes_is_opt_in_via_env_or_repo_config():
+    config = resolve(environ={"PRREVIEW_ALLOW_APPLY_FIXES": "true", "PRREVIEW_APPLIER": "llm"})
+    assert config.allow_apply_fixes is True
+    assert config.applier == "llm"
+
+    config = resolve(repo_config={"allow_apply_fixes": True, "applier": "llm"})
+    assert config.allow_apply_fixes is True
+    assert config.applier == "llm"
 
 
 def test_precedence_env_then_repo_then_request():

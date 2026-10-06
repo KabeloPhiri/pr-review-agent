@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# bb - minimal READ-ONLY Bitbucket Cloud helper (there is no official Bitbucket CLI).
+# Auth: BITBUCKET_WORKSPACE, BITBUCKET_USERNAME, BITBUCKET_APP_PASSWORD from .devcontainer/.env
+#       (app password needs: repositories:read, pullrequests:read, pipelines:read).
+#
+#   bb repos                     list repositories in the workspace
+#   bb prs <repo> [state]        list pull requests (state: OPEN|MERGED|DECLINED, default OPEN)
+#   bb pipelines <repo>          list recent pipeline runs
+#   bb get <api-path>            raw GET against https://api.bitbucket.org/2.0/<api-path>
+set -euo pipefail
+
+api="https://api.bitbucket.org/2.0"
+need() { [[ -n "${!1:-}" ]] || { echo "bb: $1 is not set - add it to .devcontainer/.env (see SECRETS.md)" >&2; exit 2; }; }
+need BITBUCKET_USERNAME; need BITBUCKET_APP_PASSWORD
+[[ "${1:-}" == "get" ]] || need BITBUCKET_WORKSPACE
+
+get() { curl -fsS -u "${BITBUCKET_USERNAME}:${BITBUCKET_APP_PASSWORD}" -H "Accept: application/json" "$api/$1"; }
+
+case "${1:-}" in
+  repos)
+    get "repositories/${BITBUCKET_WORKSPACE}?pagelen=100&sort=-updated_on" \
+      | jq -r '.values[] | [.slug, .mainbranch.name // "-", .updated_on[:10]] | @tsv' \
+      | column -t -s $'\t' ;;
+  prs)
+    repo="${2:?usage: bb prs <repo> [state]}"; state="${3:-OPEN}"
+    get "repositories/${BITBUCKET_WORKSPACE}/${repo}/pullrequests?state=${state}&pagelen=50" \
+      | jq -r '.values[] | ["#\(.id)", .state, .author.display_name, .source.branch.name + " -> " + .destination.branch.name, .title] | @tsv' \
+      | column -t -s $'\t' ;;
+  pipelines)
+    repo="${2:?usage: bb pipelines <repo>}"
+    get "repositories/${BITBUCKET_WORKSPACE}/${repo}/pipelines/?sort=-created_on&pagelen=20" \
+      | jq -r '.values[] | ["#\(.build_number)", (.state.result.name // .state.name), .target.ref_name // "-", .created_on[:19]] | @tsv' \
+      | column -t -s $'\t' ;;
+  get)
+    get "${2:?usage: bb get <api-path>}" | jq . ;;
+  *)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

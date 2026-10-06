@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# env-check - show which keys from .devcontainer/.env are configured, where they
+# come from (literal / 1Password / unset) and whether they are exported in this
+# shell. Secret values are never printed; non-secret settings (hosts, profiles,
+# regions...) are shown in full.
+set -euo pipefail
+
+envFile="${DEVCONTAINER_ENV_FILE:-}"
+if [[ -z "$envFile" ]]; then
+  for w in /workspaces/*/.devcontainer/.env; do [[ -r "$w" ]] && envFile="$w" && break; done
+fi
+if [[ -z "$envFile" || ! -r "$envFile" ]]; then
+  echo "no keys file found - copy .devcontainer/env.example to .devcontainer/.env (see SECRETS.md)" >&2
+  exit 1
+fi
+
+# keys whose value is safe to display
+isPublic() {
+  case "$1" in
+    *_HOST|*_PROFILE|*_REGION|*_URL|*_WORKSPACE|*_USERNAME|*_PROJECT|*_CLUSTER_ID|GITLAB_HOST) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+printf '%-28s %-10s %-9s %s\n' KEY SOURCE EXPORTED VALUE
+printf '%-28s %-10s %-9s %s\n' --- ------ -------- -----
+total=0; set_=0; unresolved=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line#"${line%%[![:space:]]*}"}"
+  [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+  key="${line%%=*}"; raw="${line#*=}"
+  key="${key//[[:space:]]/}"
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+  raw="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/" <<<"$raw")"
+  total=$((total+1))
+
+  if [[ -z "$raw" ]]; then source="unset"
+  elif [[ "$raw" == op://* ]]; then source="1Password"
+  else source="literal"; fi
+
+  cur="${!key:-}"
+  if [[ -n "$cur" && "$cur" != op://* ]]; then
+    exported="yes"; set_=$((set_+1))
+    if isPublic "$key"; then shown="$cur"; else shown="****  (${#cur} chars)"; fi
+  else
+    exported="no"; shown="-"
+    [[ "$source" == "1Password" ]] && unresolved=$((unresolved+1))
+  fi
+  [[ "$source" == "1Password" ]] && shown="$shown   <- ${raw%/*}/…"
+  printf '%-28s %-10s %-9s %s\n' "$key" "$source" "$exported" "$shown"
+done < "$envFile"
+
+echo
+echo "keys file : $envFile"
+echo "exported  : $set_ of $total keys"
+if (( unresolved > 0 )); then
+  echo "unresolved: $unresolved 1Password reference(s) - sign in (OP_SERVICE_ACCOUNT_TOKEN or 'eval \$(op signin)') then: source .devcontainer/secrets/load-env.sh"
+fi
+if command -v op >/dev/null 2>&1; then
+  if op whoami >/dev/null 2>&1; then echo "1Password : signed in ($(op whoami --format=json 2>/dev/null | sed -n 's/.*"url": *"\([^"]*\)".*/\1/p' | head -1))"
+  else echo "1Password : not signed in"; fi
+fi

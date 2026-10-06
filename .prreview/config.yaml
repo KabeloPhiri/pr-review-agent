@@ -1,0 +1,9 @@
+# Repo-level settings for the AI PR reviewer (see README "Configuration").
+#
+# Opt in to "/apply": the PR author can reply /apply on one of the bot's
+# inline suggestions and the bot pushes the fix as a commit. For /apply this
+# file is read from the PR's *target* branch, so this only takes effect for
+# pull requests opened after it has merged to master. Pushing also needs the
+# PR_REVIEW_APPLY_TOKEN repo secret (see .github/workflows/pr-apply.yml).
+allow_apply_fixes: true
+applier: llm

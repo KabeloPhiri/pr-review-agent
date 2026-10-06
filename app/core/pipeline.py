@@ -16,9 +16,20 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
-from app.core.errors import ReviewerError
-from app.core.models import Diff, Finding, PullRequest, PullRequestRef, ReviewResult
+from app.core.errors import ReviewerError, ScmConflictError, ScmError
+from app.core.models import (
+    ApplyResult,
+    CommentDraft,
+    Diff,
+    Finding,
+    PullRequest,
+    PullRequestRef,
+    ReviewResult,
+    Severity,
+)
+from app.services.apply import get_applier
 from app.services.policy import gate, standards
+from app.services.publish.formatter import parse_finding_comment
 from app.services.publish.publisher import Publisher
 from app.services.quality import get_quality_connector
 from app.services.review import ReviewContext, get_reviewer
@@ -51,7 +62,7 @@ class ReviewPipeline:
         overrides: dict[str, Any] | None = None,
         publish: bool = True,
     ) -> ReviewResult:
-        _redact_trace_inputs(ref, overrides, publish)
+        _redact_trace_inputs(ref, overrides, publish=publish)
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
@@ -78,6 +89,133 @@ class ReviewPipeline:
             if publish:
                 await Publisher(scm, config).publish(pr, result)
             return result
+        finally:
+            await scm.aclose()
+
+    @mlflow.trace(name="pr_apply")
+    async def apply(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None = None,
+        comment_id: str,
+        requester: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> ApplyResult:
+        """Accept one bot suggestion and push it as a commit.
+
+        `applied=False` with a `reason` is the normal outcome for every
+        "this wasn't meant for us" case (disabled, wrong requester, stale or
+        foreign comment, nothing to change) — only a real SCM/model failure
+        raises, mirroring `run()`'s own failure policy.
+        """
+        _redact_trace_inputs(ref, overrides, comment_id=comment_id, requester=requester)
+        scm = get_connector(ref.scm, token=scm_token)
+        try:
+            pr = await scm.get_pull_request(ref)
+            # Pushing code is the repository's decision, not the pull
+            # request's: read config from the *target* branch, so a PR cannot
+            # opt itself in (or widen apply_trusted_authors) from its own
+            # .prreview/config.yaml.
+            config = await self.resolve_config(
+                scm, pr.model_copy(update={"source_commit": pr.target_commit}), overrides
+            )
+            _tag_trace(pr, config)
+
+            if not config.allow_apply_fixes:
+                return ApplyResult(ref=ref, applied=False, reason="apply_fixes_disabled")
+            if requester != pr.author:
+                return ApplyResult(ref=ref, applied=False, reason="unauthorized_requester")
+            if pr.is_fork:
+                return ApplyResult(ref=ref, applied=False, reason="fork_pull_request_unsupported")
+
+            source = await scm.get_comment(pr, comment_id)
+            if source is None or source.file is None:
+                return ApplyResult(
+                    ref=ref, applied=False, reason="comment_not_found_or_unsupported"
+                )
+            # The rendered format is public, so anyone can paste a lookalike
+            # comment; only the identity that posts reviews is trusted.
+            if source.author not in config.apply_trusted_authors:
+                return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
+
+            parsed = parse_finding_comment(source.body)
+            if parsed is None:
+                return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
+
+            # Keyed by the accepted comment, so a second `/apply` or a
+            # redelivered webhook cannot apply the same fix twice.
+            applied_marker = f"prreview:applied:{comment_id}"
+            if any(c.marker == applied_marker for c in await scm.list_comments(pr)):
+                return ApplyResult(ref=ref, applied=False, reason="already_applied")
+
+            finding = Finding(
+                file=source.file,
+                line=source.line,
+                severity=Severity(parsed["severity"]),
+                rule_id=parsed["rule_id"],
+                message=parsed["message"],
+                suggestion=parsed["suggestion"],
+            )
+
+            current_text = await scm.get_file_text(pr, source.file)
+            if current_text is None:
+                raise ScmError(f"Could not read the current content of {source.file}")
+
+            applier = get_applier(config.applier, config)
+            try:
+                new_content = await applier.generate_patch(
+                    file=source.file, current_text=current_text, finding=finding
+                )
+            finally:
+                await applier.aclose()
+
+            if not new_content or new_content == current_text:
+                return ApplyResult(ref=ref, applied=False, reason="no_change_generated")
+
+            try:
+                commit_sha = await scm.update_file(
+                    pr,
+                    source.file,
+                    new_content,
+                    message=f"Apply AI review suggestion ({finding.rule_id}) on {source.file}",
+                )
+            except ScmConflictError:
+                # The branch changed this file after `pr` was read; pushing a
+                # patch of the older content would revert those changes.
+                return ApplyResult(ref=ref, applied=False, reason="file_changed_since_review")
+
+            # The commit is on the branch now. Anything below failing is a
+            # warning, not a failure — reporting a landed fix as failed only
+            # invites a retry.
+            warnings: list[str] = []
+            try:
+                await scm.post_comment(
+                    pr,
+                    CommentDraft(
+                        body=(
+                            f"✅ Applied in commit `{commit_sha[:12]}`.\n\n"
+                            f"<!-- {applied_marker} -->"
+                        ),
+                        marker=applied_marker,
+                    ),
+                )
+            except ScmError as exc:
+                logger.warning("Applied %s but could not confirm it", commit_sha, exc_info=True)
+                warnings.append(f"could not post the confirmation comment ({exc.message})")
+            try:
+                await scm.close_comment(pr, source.thread_id)
+            except ScmError as exc:
+                logger.warning("Applied %s but could not resolve the thread", commit_sha)
+                warnings.append(f"could not resolve the suggestion thread ({exc.message})")
+
+            return ApplyResult(
+                ref=ref,
+                applied=True,
+                file=source.file,
+                commit_sha=commit_sha,
+                warnings=warnings,
+            )
         finally:
             await scm.aclose()
 
@@ -148,7 +286,7 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
 
 
 def _redact_trace_inputs(
-    ref: PullRequestRef, overrides: dict[str, Any] | None, publish: bool
+    ref: PullRequestRef, overrides: dict[str, Any] | None, **extra: Any
 ) -> None:
     """Replace the span's auto-captured arguments with token-free ones.
 
@@ -156,7 +294,9 @@ def _redact_trace_inputs(
     is one of them — so without this the caller's PAT is written to the
     experiment in plaintext on every single review, which is exactly the
     guarantee `app/api/auth.py` makes that it never is. Inputs are overwritten
-    here, before the span ends and is exported.
+    here, before the span ends and is exported. `extra` carries whatever
+    non-secret arguments the specific entry point (`run` vs `apply`) was
+    called with.
     """
     try:
         span = mlflow.get_current_active_span()
@@ -166,7 +306,7 @@ def _redact_trace_inputs(
             {
                 "ref": ref.model_dump(mode="json"),
                 "overrides": overrides or {},
-                "publish": publish,
+                **extra,
                 "scm_token": "(redacted)",
             }
         )

@@ -1,9 +1,11 @@
 """HTTP surface.
 
-Three endpoints, all mounted on the MLflow `AgentServer` FastAPI app:
+Mounted on the MLflow `AgentServer` FastAPI app:
 
     POST /review            run a review (sync, async, or auto)
     GET  /review/{job_id}   poll a background review
+    POST /apply             accept one bot suggestion and push it as a commit
+    GET  /apply/{job_id}    poll a background apply
     POST /config/effective  show the configuration a review would use
 """
 
@@ -16,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import token_from_request
 from app.api.schemas import (
+    ApplyRequest,
+    ApplyResponse,
     ConfigRequest,
     ConfigResponse,
     ReviewMode,
@@ -24,7 +28,9 @@ from app.api.schemas import (
 )
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
+from app.core.models import ApplyResult, ReviewResult
 from app.core.pipeline import ReviewPipeline
+from app.services.apply import known_appliers
 from app.services.policy import standards
 from app.services.quality import known_quality_connectors
 from app.services.review import known_reviewers
@@ -73,22 +79,44 @@ def build_router(runner: JobRunner) -> APIRouter:
 
     @router.get("/review/{job_id}", response_model=ReviewResponse)
     async def get_review(job_id: str):
-        job = await runner.store.get(job_id)
-        if job is None:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "status": "unknown",
-                    "job_id": job_id,
-                    "error": (
-                        "No such job. Job state is per-process and expires, so this can also "
-                        "mean the app restarted or another replica served the request."
-                    ),
-                },
+        return await _poll(runner, job_id, ReviewResponse, ReviewResult)
+
+    @router.post("/apply", response_model=ApplyResponse)
+    async def apply(body: ApplyRequest, request: Request):
+        ref = body.to_ref()
+        token = token_from_request(request, body.scm_token)
+
+        async def work():
+            return await pipeline.apply(
+                ref,
+                scm_token=token,
+                comment_id=body.comment_id,
+                requester=body.requester,
+                overrides=body.config,
             )
-        if job.status is JobStatus.FAILED:
-            return JSONResponse(status_code=500, content=ReviewResponse.from_job(job).model_dump())
-        return ReviewResponse.from_job(job)
+
+        if body.mode is ReviewMode.SYNC:
+            logger.info("Applying a suggestion on %s synchronously", ref.slug())
+            return ApplyResponse.completed(await work())
+
+        job = await runner.submit(ref.slug(), work)
+        logger.info("Queued apply %s for %s (mode=%s)", job.job_id, ref.slug(), body.mode.value)
+
+        if body.mode is ReviewMode.ASYNC:
+            return _accepted(job, ApplyResponse)
+
+        finished = await runner.wait_for(job.job_id, timeout=_sync_wait(body))
+        if finished and finished.status is JobStatus.COMPLETED:
+            return ApplyResponse.from_job(finished)
+        if finished and finished.status is JobStatus.FAILED:
+            return JSONResponse(
+                status_code=500, content=ApplyResponse.from_job(finished).model_dump()
+            )
+        return _accepted(finished or job, ApplyResponse)
+
+    @router.get("/apply/{job_id}", response_model=ApplyResponse)
+    async def get_apply(job_id: str):
+        return await _poll(runner, job_id, ApplyResponse, ApplyResult)
 
     @router.post("/config/effective", response_model=ConfigResponse)
     async def effective_config(body: ConfigRequest, request: Request):
@@ -112,14 +140,38 @@ def build_router(runner: JobRunner) -> APIRouter:
                 "scm": known_scm_connectors(),
                 "quality": known_quality_connectors(),
                 "reviewer": known_reviewers(),
+                "applier": known_appliers(),
             },
         )
 
     return router
 
 
-def _accepted(job) -> JSONResponse:
-    return JSONResponse(status_code=202, content=ReviewResponse.from_job(job).model_dump())
+async def _poll(runner: JobRunner, job_id: str, response_cls: type, result_cls: type):
+    """Shared by both poll routes; reviews and applies share one job store."""
+    job = await runner.store.get(job_id)
+    if job is None or (job.result is not None and not isinstance(job.result, result_cls)):
+        # A job of the other kind is reported as missing here rather than
+        # failing response validation with a 500.
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "unknown",
+                "job_id": job_id,
+                "error": (
+                    "No such job. Job state is per-process and expires, so this can also "
+                    "mean the app restarted or another replica served the request. "
+                    "Reviews are polled at /review/{job_id}, applies at /apply/{job_id}."
+                ),
+            },
+        )
+    if job.status is JobStatus.FAILED:
+        return JSONResponse(status_code=500, content=response_cls.from_job(job).model_dump())
+    return response_cls.from_job(job)
+
+
+def _accepted(job, response_cls: type = ReviewResponse) -> JSONResponse:
+    return JSONResponse(status_code=202, content=response_cls.from_job(job).model_dump())
 
 
 def _sync_wait(body: ReviewRequest) -> float:

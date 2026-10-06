@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app.core.errors import ReviewerError
+from app.core.llm_client import build_client, complete, message_text
 from app.core.models import Finding, Severity
 from app.services.review.base import ReviewContext, Reviewer, reviewer_registry
 from app.services.review.chunking import ReviewChunk
@@ -66,15 +66,7 @@ class LlmReviewer(Reviewer):
         requires Databricks credentials.
         """
         if self._client is None:
-            try:
-                from databricks.sdk import WorkspaceClient
-
-                self._client = WorkspaceClient().serving_endpoints.get_open_ai_client()
-            except Exception as exc:  # pragma: no cover - credential/environment specific
-                raise ReviewerError(
-                    "Could not create the Databricks serving client",
-                    detail=str(exc),
-                ) from exc
+            self._client = build_client()
         return self._client
 
     # -- reviewing --------------------------------------------------------
@@ -111,31 +103,13 @@ class LlmReviewer(Reviewer):
         return self._parse(content, chunk, context)
 
     def _complete(self, system_prompt: str, user_prompt: str) -> str:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        kwargs: dict[str, Any] = {
-            "model": self.config.model_endpoint,
-            "messages": messages,
-            "temperature": self.config.temperature,
-        }
-        try:
-            response = self.client.chat.completions.create(
-                **kwargs, response_format={"type": "json_object"}
-            )
-        except Exception as exc:
-            # Not every serving endpoint supports response_format; the prompt
-            # already demands bare JSON, so retry without it before failing.
-            logger.info("Retrying without response_format: %s", exc)
-            try:
-                response = self.client.chat.completions.create(**kwargs)
-            except Exception as inner:
-                raise ReviewerError(
-                    f"Model endpoint {self.config.model_endpoint!r} call failed",
-                    detail=str(inner),
-                ) from inner
-        return _message_text(response.choices[0].message)
+        return complete(
+            self.client,
+            model=self.config.model_endpoint,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=self.config.temperature,
+        )
 
     # -- response handling ------------------------------------------------
 
@@ -183,32 +157,9 @@ class LlmReviewer(Reviewer):
         return findings
 
 
-def _message_text(message: Any) -> str:
-    """Pull the assistant's text out of a reply, whatever shape it arrives in.
-
-    Most endpoints set `content` to a plain string. Reasoning models served on
-    Databricks (the `gpt-oss` family, for one) instead return a list of parts —
-    `{"type": "reasoning", ...}` followed by `{"type": "text", "text": ...}` —
-    and only the text part is the answer. Concatenating everything would feed
-    the model's own chain of thought to the JSON parser.
-    """
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            get = (
-                part.get
-                if isinstance(part, dict)
-                else lambda key, _d=None, _p=part: getattr(_p, key, _d)
-            )
-            if get("type") == "text":
-                parts.append(str(get("text") or ""))
-        if parts:
-            return "\n".join(parts)
-    # Some gateways only populate the streaming-style field.
-    return str(getattr(message, "reasoning_content", "") or "")
+#: Kept as an alias: moved to `app.core.llm_client` so `app/services/apply/`
+#: can reuse it without reaching into this plugin's own package.
+_message_text = message_text
 
 
 def _coerce_severity(value: str) -> Severity:

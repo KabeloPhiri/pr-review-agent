@@ -10,8 +10,11 @@ Fixture layout::
     <fixture_dir>/
       pr.json          # optional PullRequest metadata overrides
       diff.patch       # unified diff (required)
-      comments.json    # optional [{thread_id, marker, is_closed}, ...]
+      comments.json    # optional [{thread_id, marker, is_closed, body, author}, ...]
       files/           # optional repo files, e.g. files/.prreview/config.yaml
+
+`body`/`author` on a `comments.json` entry are only read by `get_comment` —
+`list_comments`/the publisher's idempotency scan never need them.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from app.core.models import (
     ExistingComment,
     PullRequest,
     PullRequestRef,
+    SourceComment,
     Verdict,
 )
 from app.services.scm.base import ScmConnector, scm_registry
@@ -45,6 +49,7 @@ class FakeScmConnector(ScmConnector):
         self.posted: list[CommentDraft] = []
         self.closed: list[str] = []
         self.status: tuple[Verdict, str] | None = None
+        self.updated_files: list[tuple[str, str]] = []
         self._fixture_dir: Path | None = None
 
     # -- fixtures ---------------------------------------------------------
@@ -105,16 +110,17 @@ class FakeScmConnector(ScmConnector):
             return None
         return target.read_text(encoding="utf-8")
 
+    def _fixture_comments(self) -> list[dict]:
+        stored = self._fixture_dir / "comments.json" if self._fixture_dir else None
+        if not stored or not stored.exists():
+            return []
+        return json.loads(stored.read_text(encoding="utf-8"))
+
     async def list_comments(self, pr: PullRequest) -> list[ExistingComment]:
         # Usable as a bare comment sink (no fixtures), which is how the
-        # publisher tests drive it.
-        stored = self._fixture_dir / "comments.json" if self._fixture_dir else None
-        existing = [
-            ExistingComment(**item)
-            for item in (
-                json.loads(stored.read_text(encoding="utf-8")) if stored and stored.exists() else []
-            )
-        ]
+        # publisher tests drive it. Extra keys (`body`, `author`) on a
+        # fixture entry are ignored here and only read by `get_comment`.
+        existing = [ExistingComment(**item) for item in self._fixture_comments()]
         # Comments posted in this process count as existing, so a second
         # publish inside one run is a no-op just like a real re-run.
         existing.extend(
@@ -122,6 +128,25 @@ class FakeScmConnector(ScmConnector):
             for i, c in enumerate(self.posted)
         )
         return existing
+
+    async def get_comment(self, pr: PullRequest, comment_id: str) -> SourceComment | None:
+        for item in self._fixture_comments():
+            if item.get("thread_id") == comment_id and "body" in item:
+                return SourceComment(
+                    thread_id=comment_id,
+                    body=item["body"],
+                    file=item.get("file"),
+                    line=item.get("line"),
+                    author=item.get("author", ""),
+                )
+        if comment_id.startswith("local-"):
+            index = int(comment_id[len("local-") :])
+            if 0 <= index < len(self.posted):
+                draft = self.posted[index]
+                return SourceComment(
+                    thread_id=comment_id, body=draft.body, file=draft.file, line=draft.line
+                )
+        return None
 
     # -- writing ----------------------------------------------------------
 
@@ -132,6 +157,13 @@ class FakeScmConnector(ScmConnector):
 
     async def close_comment(self, pr: PullRequest, thread_id: str) -> None:
         self.closed.append(thread_id)
+
+    async def update_file(
+        self, pr: PullRequest, path: str, new_content: str, message: str
+    ) -> str:
+        self.updated_files.append((path, new_content))
+        logger.info("[fake-scm] update %s: %s", path, message)
+        return f"fake-commit-{len(self.updated_files) - 1}"
 
     async def set_status(
         self,

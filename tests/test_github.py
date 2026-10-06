@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 
-from app.core.errors import ScmAuthError, ScmError
+from app.core.errors import ScmAuthError, ScmConflictError, ScmError
 from app.core.models import ChangeType, CommentDraft, GateLevel, PullRequestRef, Verdict
 from app.services.scm.github import GitHubConnector
 
@@ -39,6 +39,8 @@ class FakeApi:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.inline_comment_status = 201
+        self.head_repo: dict | None = {"full_name": "KabeloPhiri/platform"}
+        self.put_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -52,8 +54,12 @@ class FakeApi:
                     "title": "Add summary",
                     "body": "why",
                     "user": {"login": "KabeloPhiri"},
-                    "head": {"ref": "feature", "sha": "src111"},
-                    "base": {"ref": "main", "sha": "tgt222"},
+                    "head": {"ref": "feature", "sha": "src111", "repo": self.head_repo},
+                    "base": {
+                        "ref": "main",
+                        "sha": "tgt222",
+                        "repo": {"full_name": "KabeloPhiri/platform"},
+                    },
                     "draft": False,
                     "html_url": "https://github.com/KabeloPhiri/platform/pull/42",
                 },
@@ -71,10 +77,47 @@ class FakeApi:
                 ],
             )
 
+        if path.endswith("/contents/jobs/etl.py") and method == "GET":
+            return httpx.Response(200, json={"sha": "blob123", "content": "ZGVmIGZvbygpOiAuLi4="})
+
+        if path.endswith("/contents/jobs/etl.py") and method == "PUT":
+            if self.put_status == 409:
+                return httpx.Response(409, json={"message": "jobs/etl.py does not match blob123"})
+            return httpx.Response(200, json={"commit": {"sha": "newsha456"}})
+
         if "/contents/" in path and method == "GET":
             if path.endswith(".prreview/config.yaml"):
                 return httpx.Response(200, text="severity_gate: warning\n")
             return httpx.Response(404, json={"message": "Not Found"})
+
+        if path.endswith("/pulls/comments/501") and method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 501,
+                    "node_id": "RC_node501",
+                    "body": "**WARNING** · `rule`\n\nfix it\n\n<!-- prreview:abc -->",
+                    "path": "jobs/etl.py",
+                    "line": 4,
+                    "user": {"login": "KabeloPhiri"},
+                    "pull_request_url": "https://api.github.com/repos/KabeloPhiri/platform/pulls/42",
+                },
+            )
+
+        if path.endswith("/pulls/comments/601") and method == "GET":
+            # Same repo, different pull request.
+            return httpx.Response(
+                200,
+                json={
+                    "id": 601,
+                    "node_id": "RC_node601",
+                    "body": "elsewhere",
+                    "path": "jobs/etl.py",
+                    "line": 4,
+                    "user": {"login": "github-actions[bot]"},
+                    "pull_request_url": "https://api.github.com/repos/KabeloPhiri/platform/pulls/7",
+                },
+            )
 
         if path.endswith("/pulls/42/comments") and method == "GET":
             if int(request.url.params.get("page", 1)) > 1:
@@ -342,4 +385,83 @@ async def test_spent_rate_limit_is_not_reported_as_an_auth_problem():
         await connector.get_pull_request(_ref())
     assert not isinstance(exc.value, ScmAuthError)
     assert "rate limit" in exc.value.message.lower()
+    await connector.aclose()
+
+
+# --- accept-and-apply --------------------------------------------------
+
+
+async def test_get_comment_fetches_by_the_plain_rest_id(connector):
+    pr = await connector.get_pull_request(_ref())
+    comment = await connector.get_comment(pr, "501")
+
+    assert comment is not None
+    assert comment.thread_id == "review:RC_node501"
+    assert comment.file == "jobs/etl.py"
+    assert comment.line == 4
+    assert comment.author == "KabeloPhiri"
+    await connector.aclose()
+
+
+async def test_get_comment_is_none_when_not_found(connector):
+    pr = await connector.get_pull_request(_ref())
+    assert await connector.get_comment(pr, "does-not-exist") is None
+    await connector.aclose()
+
+
+async def test_update_file_fetches_sha_then_puts_new_content(connector, api):
+    pr = await connector.get_pull_request(_ref())
+    sha = await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+
+    assert sha == "newsha456"
+    put_request = api.find("/contents/jobs/etl.py", method="PUT")
+    body = json.loads(put_request.content)
+    assert body["sha"] == "blob123"
+    assert body["branch"] == "feature"
+    assert body["message"] == "apply suggestion"
+    import base64
+
+    assert base64.b64decode(body["content"]).decode() == "new content"
+    await connector.aclose()
+
+
+async def test_update_file_reads_the_sha_at_the_reviewed_commit(connector, api):
+    """The sha must come from the commit the new content was derived from,
+    not the branch tip, or GitHub's conflict check can never fire."""
+    pr = await connector.get_pull_request(_ref())
+    await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+
+    get_request = api.find("/contents/jobs/etl.py", method="GET")
+    assert get_request.url.params["ref"] == "src111"
+    await connector.aclose()
+
+
+async def test_update_file_conflict_is_a_conflict_error(connector, api):
+    api.put_status = 409
+    pr = await connector.get_pull_request(_ref())
+    with pytest.raises(ScmConflictError):
+        await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+    await connector.aclose()
+
+
+async def test_get_comment_from_another_pull_request_is_none(connector):
+    pr = await connector.get_pull_request(_ref())
+    assert await connector.get_comment(pr, "601") is None
+    await connector.aclose()
+
+
+async def test_pull_request_from_a_fork_is_flagged(connector, api):
+    assert (await connector.get_pull_request(_ref())).is_fork is False
+    api.head_repo = {"full_name": "someone/platform"}
+    assert (await connector.get_pull_request(_ref())).is_fork is True
+    # A deleted fork leaves head.repo null.
+    api.head_repo = None
+    assert (await connector.get_pull_request(_ref())).is_fork is True
+    await connector.aclose()
+
+
+async def test_update_file_without_a_readable_sha_is_an_scm_error(connector):
+    pr = await connector.get_pull_request(_ref())
+    with pytest.raises(ScmError):
+        await connector.update_file(pr, "does/not/exist.py", "new content", "apply suggestion")
     await connector.aclose()

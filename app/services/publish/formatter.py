@@ -8,11 +8,17 @@ the same finding must not produce a duplicate comment.
 from __future__ import annotations
 
 import hashlib
+import re
 
 from app.core.models import CommentDraft, Finding, ReviewResult, Severity
 
 MARKER_PREFIX = "prreview"
 SUMMARY_RULE = "summary"
+
+_HEADER_RE = re.compile(r"\*\*(ERROR|WARNING|INFO)\*\*\s*·\s*`([^`]+)`\s*$")
+_SUGGESTION_HEADING = "**Suggestion**"
+_REPORTED_BY_RE = re.compile(r"^_Reported by .+\._$")
+_MARKER_LINE_RE = re.compile(r"<!--\s*prreview:[^\s>]+\s*-->")
 
 _EMOJI = {
     Severity.ERROR: "🔴",
@@ -100,3 +106,65 @@ def render_summary(result: ReviewResult) -> CommentDraft:
     lines += ["", f"<!-- {summary_marker(result)} -->"]
 
     return CommentDraft(body="\n".join(lines), marker=summary_marker(result), is_summary=True)
+
+
+def parse_finding_comment(body: str) -> dict | None:
+    """Reconstruct a finding's fields from a `render_finding` comment body.
+
+    The exact inverse of `render_finding` — this is what lets
+    `ReviewPipeline.apply` recover a `Finding` from a comment the PR author
+    accepted without a second state store: the PR's own comment *is* the
+    state. Returns `None` when `body` is not recognisably one of this bot's
+    own finding comments (no marker, or no header line), which callers treat
+    as a soft "not a bot suggestion" outcome.
+    """
+    if not _MARKER_LINE_RE.search(body):
+        return None
+
+    lines = body.splitlines()
+    if len(lines) < 3:
+        return None
+
+    header = _HEADER_RE.search(lines[0])
+    if not header:
+        return None
+    severity, rule_id = header.group(1).lower(), header.group(2)
+
+    suggestion_idx = _index_of(lines, lambda line: line == _SUGGESTION_HEADING)
+    reported_idx = _index_of(lines, lambda line: bool(_REPORTED_BY_RE.match(line)))
+    marker_idx = _index_of(lines, lambda line: bool(_MARKER_LINE_RE.search(line)))
+
+    message_end = suggestion_idx if suggestion_idx is not None else reported_idx
+    if message_end is None:
+        message_end = marker_idx
+    message = _strip_block(lines[2:message_end])
+    if not message:
+        return None
+
+    suggestion = None
+    if suggestion_idx is not None:
+        suggestion_end = reported_idx if reported_idx is not None else marker_idx
+        suggestion = _strip_block(lines[suggestion_idx + 1 : suggestion_end]) or None
+
+    return {
+        "severity": severity,
+        "rule_id": rule_id,
+        "message": message,
+        "suggestion": suggestion,
+    }
+
+
+def _index_of(lines: list[str], predicate) -> int | None:
+    for i, line in enumerate(lines):
+        if predicate(line):
+            return i
+    return None
+
+
+def _strip_block(lines: list[str]) -> str:
+    start, end = 0, len(lines)
+    while start < end and lines[start] == "":
+        start += 1
+    while end > start and lines[end - 1] == "":
+        end -= 1
+    return "\n".join(lines[start:end])

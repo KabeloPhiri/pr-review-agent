@@ -1,0 +1,149 @@
+# AI PR review — "accept a suggestion" GitHub Actions workflow.
+#
+# Copy this to `.github/workflows/pr-apply.yml` alongside `pr-review.yml` in
+# the repository you want reviewed, so the PR author can turn one of the
+# bot's inline suggestions into a pushed commit by replying `/apply` on it.
+#
+# This is a materially different trust boundary from `pr-review.yml`: that
+# workflow only ever comments and sets a status; this one pushes code on the
+# bot's behalf. It is its own workflow file (not a job bolted onto
+# `pr-review.yml`) so the `contents: write` permission stays separately
+# auditable. The app itself still refuses to act unless:
+#   - the repo has opted in with `allow_apply_fixes: true` (and
+#     `applier: llm`) in `.prreview/config.yaml` on the PR's *target* branch —
+#     a pull request cannot opt itself in from its own branch;
+#   - the replier is the PR's own author;
+#   - the comment was written by one of `apply_trusted_authors` (default
+#     `github-actions[bot]`, which is who pr-review.yml posts as);
+#   - the PR is not from a fork.
+#
+# Prerequisites
+# -------------
+# Same secrets as `pr-review.yml`: DATABRICKS_HOST, DATABRICKS_CLIENT_ID,
+# DATABRICKS_CLIENT_SECRET, PR_REVIEW_APP_URL. Plus PR_REVIEW_APPLY_TOKEN:
+#
+# The fix must NOT be pushed with this job's own GITHUB_TOKEN. GitHub does not
+# start workflows for pushes made with GITHUB_TOKEN, so neither pr-review.yml
+# nor this repo's CI would run on the bot's commit, leaving an unreviewed,
+# untested head on the pull request. Use a token that does trigger workflows:
+#   - a fine-grained PAT for a machine user, scoped to this repo, with
+#     Contents (Read & write) and Pull requests (Read & write); or
+#   - a GitHub App installation token, minted in an earlier step with
+#     actions/create-github-app-token and passed in place of the secret below.
+# The push then re-triggers pr-review.yml (`synchronize`) and your own CI.
+
+name: AI code review - apply suggestion
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    # Only a reply (has `in_reply_to_id`) whose body opens with `/apply` is a
+    # suggestion-acceptance; every other inline comment is ignored here.
+    if: |
+      github.event.comment.in_reply_to_id != null &&
+      startsWith(github.event.comment.body, '/apply')
+    steps:
+      - name: Apply suggestion
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          PR_REVIEW_APP_URL: ${{ secrets.PR_REVIEW_APP_URL }}
+          GH_TOKEN: ${{ secrets.PR_REVIEW_APPLY_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMENT_ID: ${{ github.event.comment.in_reply_to_id }}
+          REQUESTER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+
+          APP_URL="${PR_REVIEW_APP_URL%/}"
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::PR_REVIEW_APPLY_TOKEN is not set. See the comment at the top of this workflow."
+            exit 1
+          fi
+
+          # Databricks Apps only accept OAuth tokens, so mint one from the
+          # service principal's client credentials — same as pr-review.yml.
+          TOKEN=$(curl -sS --fail-with-body \
+            -u "$DATABRICKS_CLIENT_ID:$DATABRICKS_CLIENT_SECRET" \
+            -d 'grant_type=client_credentials&scope=all-apis' \
+            "${DATABRICKS_HOST%/}/oidc/v1/token" | jq -r .access_token)
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Could not mint a Databricks OAuth token."
+            exit 1
+          fi
+
+          # The push token travels in X-SCM-Token and is never stored by the
+          # app, same as every review request. `auto` waits up to ~90s, then
+          # hands back a job id rather than letting the app's ~120s
+          # connection limit cut a long model call off mid-push.
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$APP_URL/apply" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-SCM-Token: $GH_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+                  --arg repo "$REPO" --arg pr "$PR_NUMBER" \
+                  --arg cid "$COMMENT_ID" --arg req "$REQUESTER" \
+                  '{scm: "github", repository: $repo, pull_request_id: $pr,
+                    comment_id: $cid, requester: $req, mode: "auto"}')")
+
+          cat response.json | jq . || cat response.json
+
+          if [ "$HTTP_CODE" -ge 400 ] && [ "$HTTP_CODE" -ne 500 ]; then
+            echo "::error::The apply endpoint returned $HTTP_CODE."
+            exit 1
+          fi
+
+          STATUS=$(jq -r '.status // "unknown"' response.json)
+          JOB_ID=$(jq -r '.job_id // empty' response.json)
+
+          if [ "$STATUS" = "queued" ] || [ "$STATUS" = "running" ]; then
+            echo "Apply queued as $JOB_ID; polling."
+            for _ in $(seq 1 60); do
+              sleep 10
+              curl -sS -o response.json \
+                -H "Authorization: Bearer $TOKEN" \
+                "$APP_URL/apply/$JOB_ID" || true
+              STATUS=$(jq -r '.status // "unknown"' response.json)
+              [ "$STATUS" = "completed" ] && break
+              [ "$STATUS" = "failed" ] && break
+              # Job state is per-process; a 404 means the app restarted or
+              # another replica answered. The fix may still land — the bot
+              # replies on the PR when it does.
+              if [ "$STATUS" = "unknown" ]; then
+                echo "::warning::Lost track of job $JOB_ID. Check the PR for the bot's confirmation."
+                exit 0
+              fi
+            done
+          fi
+
+          if [ "$STATUS" = "failed" ]; then
+            echo "::error::Apply failed: $(jq -r '.error // "unknown error"' response.json)"
+            exit 1
+          fi
+          if [ "$STATUS" != "completed" ]; then
+            echo "::warning::Apply job $JOB_ID still running after 10 minutes."
+            exit 0
+          fi
+
+          APPLIED=$(jq -r '.result.applied // false' response.json)
+          REASON=$(jq -r '.result.reason // ""' response.json)
+          if [ "$APPLIED" = "true" ]; then
+            SHA=$(jq -r '.result.commit_sha' response.json)
+            echo "### AI code review: applied suggestion in \`${SHA:0:12}\`" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.result.warnings[]? | "::warning::\(.)"' response.json
+          else
+            echo "### AI code review: did not apply ($REASON)" >> "$GITHUB_STEP_SUMMARY"
+          fi

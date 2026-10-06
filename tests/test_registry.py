@@ -33,6 +33,7 @@ def test_duplicate_registration_is_rejected():
 
 
 def test_shipped_plugins_are_discoverable():
+    from app.services.apply import known_appliers
     from app.services.quality import known_quality_connectors
     from app.services.review import known_reviewers
     from app.services.scm import known_scm_connectors
@@ -41,3 +42,5 @@ def test_shipped_plugins_are_discoverable():
     assert "fake" in known_scm_connectors()
     assert "noop" in known_quality_connectors()
     assert "llm" in known_reviewers()
+    assert "llm" in known_appliers()
+    assert "noop" in known_appliers()
