@@ -69,6 +69,10 @@ _ALLOWED_PATH = re.compile(
 _FRONT_MATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
 
 
+#: `/` separators in each SCM's repository slug: `owner/repo`, `org/project/repo`.
+_SLUG_SPLITS = {"github": 1, "azure_devops": 2}
+
+
 @dataclass(frozen=True, order=True)
 class RepoKey:
     """One repository on one SCM, e.g. `github` + `KabeloPhiri/pr-review-agent`."""
@@ -86,7 +90,11 @@ class RepoKey:
         scm, _, rest = value.partition("/")
         if not scm or not rest or "/" in rest:
             raise ValueError(f"Not a repository key: {value!r}")
-        return cls(scm=scm, slug=rest.replace("__", "/"))
+        # `path` turns `/` into `__`. Split only as many times as the SCM has
+        # path segments, so a repository *name* containing `__` survives:
+        # GitHub owners and Azure DevOps organisations cannot contain `_`.
+        splits = _SLUG_SPLITS.get(scm, -1)
+        return cls(scm=scm, slug="/".join(rest.split("__", splits)))
 
     @property
     def path(self) -> str:

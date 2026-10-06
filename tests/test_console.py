@@ -118,11 +118,18 @@ def test_repository_filter_narrows_every_figure():
 
 
 def test_repositories_page_lists_each_repository_and_sorts():
-    html = _client().get(
-        "/console/repositories?sort=total_tokens&dir=desc", headers=_as(ADMIN)
-    ).text
-    assert html.index(B) < html.index(A)  # B used more tokens
-    assert 'aria-sort="descending"' in html
+    """Both directions, so the test cannot pass on alphabetical or default
+    order: B (ledger) sorts first by name and by last review, A by fewer tokens."""
+
+    def order(query):
+        html = _client().get(f"/console/repositories?{query}", headers=_as(ADMIN)).text
+        table = html.split("<tbody>", 1)[1]  # the top bar lists repos alphabetically
+        return "A" if table.index(f">{A}<") < table.index(f">{B}<") else "B", html
+
+    first, html = order("sort=total_tokens&dir=desc")
+    assert first == "B" and 'aria-sort="descending"' in html
+    first, html = order("sort=total_tokens&dir=asc")
+    assert first == "A" and 'aria-sort="ascending"' in html
 
 
 def test_unreadable_traces_show_an_error_not_a_crash():
@@ -143,8 +150,9 @@ def test_empty_range_shows_empty_states():
 def test_config_page_names_the_layer_each_value_comes_from(monkeypatch):
     monkeypatch.setenv("PRREVIEW_SEVERITY_GATE", "warning")
     html = _client().get("/console/config", headers=_as(ADMIN)).text
-    row = re.search(r"<code>severity_gate</code>.*?</tr>", html, re.DOTALL).group(0)
-    assert "warning" in row and "Environment" in row
+    match = re.search(r"<code>severity_gate</code>.*?</tr>", html, re.DOTALL)
+    assert match, "the severity_gate row is missing from the config page"
+    assert "warning" in match.group(0) and "Environment" in match.group(0)
 
 
 def test_prompts_page_shows_guidance_and_the_fixed_output_format():

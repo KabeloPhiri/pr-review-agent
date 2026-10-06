@@ -89,11 +89,13 @@ def record_from_info(info: Any) -> TraceRecord:
     usage = dict(getattr(info, "token_usage", None) or {})
     state = getattr(info, "state", "")
     repo, pr = meta.get("pr.repo", ""), meta.get("pr.number", "")
-    if not repo and meta.get("pr.slug") and meta.get("pr.scm"):
+    if not repo and "#" in meta.get("pr.slug", "") and meta.get("pr.scm"):
         # Traces written before repository tagging still carry the PR slug
-        # (`owner/repo#9`), so older reviews can be grouped too.
+        # (`owner/repo#9`), so older reviews can be grouped too. A slug
+        # without `#` is not one we wrote; leave it ungrouped.
         slug, _, number = meta["pr.slug"].rpartition("#")
-        repo, pr = f"{meta['pr.scm']}/{slug.replace('/', '__')}", pr or number
+        if slug:
+            repo, pr = f"{meta['pr.scm']}/{slug.replace('/', '__')}", pr or number
     return TraceRecord(
         trace_id=str(getattr(info, "trace_id", "") or getattr(info, "request_id", "")),
         kind=tags.get("mlflow.traceName", ""),
@@ -216,6 +218,12 @@ class RepositoryRow:
         return self.findings / completed if completed else None
 
 
+def applied_count(record: TraceRecord) -> int:
+    """Suggestions one successful apply trace landed: its count for `/apply
+    all`, one for a single `/apply`. Overview and Repositories both use it."""
+    return max(1, record.int_tag("applied_count"))
+
+
 def filter_repo(records: list[TraceRecord], repo: str | None) -> list[TraceRecord]:
     return [r for r in records if r.repo == repo] if repo else list(records)
 
@@ -256,8 +264,9 @@ def overview(
     prices: Mapping[str, Mapping[str, float]] | None = None,
 ) -> Overview:
     prices = prices or {}
-    records = filter_repo(records, repo)
+    # The cap applies to the whole query, so judge truncation before filtering.
     out = Overview(truncated=len(records) >= MAX_TRACES)
+    records = filter_repo(records, repo)
     durations: list[float] = []
     models: dict[str, ModelUsage] = {}
     by_day: Counter[str] = Counter()
@@ -294,7 +303,7 @@ def overview(
             elif not r.outcome_recorded:
                 outcomes["outcome not recorded"] += 1
             elif r.tag("applied") == "True":
-                out.applied += 1
+                out.applied += applied_count(r)
                 outcomes["applied"] += 1
             else:
                 outcomes[r.tag("reason") or "not applied"] += 1
@@ -339,7 +348,7 @@ def repositories(
             elif r.tag("passed") == "False":
                 row.gated += 1
         elif r.kind in (APPLY, APPLY_ALL) and r.tag("applied") == "True":
-            row.applied += max(1, r.int_tag("applied_count"))
+            row.applied += applied_count(r)
     for name in custom:
         rows.setdefault(name, RepositoryRow(repo=name)).custom_settings = True
     return sorted(rows.values(), key=lambda row: row.last_review_ms, reverse=True)
