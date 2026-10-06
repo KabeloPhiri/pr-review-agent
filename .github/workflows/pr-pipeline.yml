@@ -29,7 +29,7 @@ on:
     # These are the *base* branches a pull request targets. This repo's
     # default branch is `master`, so leaving `main` here would mean the
     # workflow never fires.
-    branches: [master, main, develop]
+    branches: [master, main, develop, feature/admin-console-quality]  # throwaway test branch only
     types: [opened, synchronize, reopened, ready_for_review]
 
 # One review per pull request: a new push cancels the run still in flight.
