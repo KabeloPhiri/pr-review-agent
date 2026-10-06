@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_macros.html" import kpi, empty, banner, bar_chart %}
+{% block title %}Overview{% endblock %}
+{% block heading %}Overview{% endblock %}
+{% block body %}
+{% if error %}{{ banner(error) }}{% endif %}
+{% if data.truncated %}{{ banner("More traces exist than one query reads. Figures cover the most recent ones; narrow the range for complete numbers.", "warning") }}{% endif %}
+
+<section aria-labelledby="reviews-h">
+  <h2 id="reviews-h">Reviews</h2>
+  <div class="kpis">
+    {{ kpi("Reviews", data.reviews | num) }}
+    {{ kpi("Pass rate", data.pass_rate | pct, "of completed reviews") }}
+    {{ kpi("Failed to run", data.failed | num, "model or SCM errors") }}
+    {{ kpi("Findings", data.findings | num) }}
+    {{ kpi("p50 duration (s)", data.p50_seconds | secs) }}
+    {{ kpi("p95 duration (s)", data.p95_seconds | secs) }}
+    {{ kpi("Jobs running now", running_jobs | num, "this app instance") }}
+  </div>
+</section>
+
+<section aria-labelledby="usage-h">
+  <h2 id="usage-h">Token usage</h2>
+  <div class="kpis">
+    {{ kpi("Tokens", data.total_tokens | num) }}
+    {{ kpi("Cost (USD)", data.cost_usd | usd, None if priced else "Prices not configured") }}
+  </div>
+  {% if data.tokens_by_day %}
+    {{ bar_chart(data.tokens_by_day, "Tokens per day", "tokens") }}
+  {% endif %}
+  {% if data.models %}
+  <table class="data">
+    <caption>Usage by model</caption>
+    <thead><tr>
+      <th scope="col">Model endpoint</th>
+      <th scope="col" class="num">Traces</th>
+      <th scope="col" class="num">Input tokens</th>
+      <th scope="col" class="num">Output tokens</th>
+      <th scope="col" class="num">Total tokens</th>
+      <th scope="col" class="num">Cost (USD)</th>
+    </tr></thead>
+    <tbody>
+    {% for m in data.models %}
+      <tr>
+        <td><code>{{ m.model }}</code></td>
+        <td class="num">{{ m.calls | num }}</td>
+        <td class="num">{{ m.input_tokens | num }}</td>
+        <td class="num">{{ m.output_tokens | num }}</td>
+        <td class="num">{{ m.total_tokens | num }}</td>
+        <td class="num">{{ m.cost_usd | usd }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No token usage in this range", "Usage is recorded for reviews run after the console was deployed.") }}
+  {% endif %}
+</section>
+
+<section aria-labelledby="apply-h">
+  <h2 id="apply-h">Applied suggestions</h2>
+  {% if data.applies %}
+  <div class="kpis">
+    {{ kpi("Apply requests", data.applies | num) }}
+    {{ kpi("Applied", data.applied | num) }}
+  </div>
+  <table class="data narrow">
+    <caption>Outcome of each /apply and /apply all request</caption>
+    <thead><tr><th scope="col">Outcome</th><th scope="col" class="num">Requests</th></tr></thead>
+    <tbody>
+    {% for outcome, count in data.apply_outcomes %}
+      <tr><td>{{ outcome | replace("_", " ") | capitalize }}</td><td class="num">{{ count | num }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No apply requests in this range") }}
+  {% endif %}
+</section>
+{% endblock %}

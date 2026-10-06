@@ -30,6 +30,7 @@ from app.core.models import (
     Severity,
     SkippedSuggestion,
 )
+from app.core.settings_store import RepoKey
 from app.services.apply import get_applier
 from app.services.policy import gate, standards
 from app.services.publish.formatter import parse_finding_comment
@@ -109,6 +110,18 @@ class ReviewPipeline:
 
             if publish:
                 await Publisher(scm, config).publish(pr, result)
+            counts = result.counts_by_severity()
+            _tag_outcome(
+                {
+                    "prreview.passed": verdict.passed,
+                    "prreview.findings": len(findings),
+                    "prreview.errors": counts["error"],
+                    "prreview.warnings": counts["warning"],
+                    "prreview.infos": counts["info"],
+                    "prreview.files_reviewed": result.files_reviewed,
+                    "prreview.published": publish,
+                }
+            )
             return result
         finally:
             await scm.aclose()
@@ -131,6 +144,25 @@ class ReviewPipeline:
         raises, mirroring `run()`'s own failure policy.
         """
         _redact_trace_inputs(ref, overrides, comment_id=comment_id, requester=requester)
+        result = await self._apply(
+            ref,
+            scm_token=scm_token,
+            comment_id=comment_id,
+            requester=requester,
+            overrides=overrides,
+        )
+        _tag_outcome({"prreview.applied": result.applied, "prreview.reason": result.reason})
+        return result
+
+    async def _apply(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None,
+        comment_id: str,
+        requester: str,
+        overrides: dict[str, Any] | None,
+    ) -> ApplyResult:
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
@@ -229,6 +261,27 @@ class ReviewPipeline:
         nothing could be applied because of a real failure does this raise.
         """
         _redact_trace_inputs(ref, overrides, requester=requester, apply_all=True)
+        result = await self._apply_all(
+            ref, scm_token=scm_token, requester=requester, overrides=overrides
+        )
+        _tag_outcome(
+            {
+                "prreview.applied": result.applied,
+                "prreview.reason": result.reason,
+                "prreview.applied_count": len(result.applied_comment_ids),
+                "prreview.skipped_count": len(result.skipped),
+            }
+        )
+        return result
+
+    async def _apply_all(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None,
+        requester: str,
+        overrides: dict[str, Any] | None,
+    ) -> BulkApplyResult:
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
@@ -569,6 +622,9 @@ def _tag_trace(pr: PullRequest, config: EffectiveConfig) -> None:
         mlflow.update_current_trace(
             metadata={
                 "pr.slug": pr.ref.slug(),
+                # The admin console groups and filters every metric by this.
+                "pr.repo": RepoKey.from_ref(pr.ref).path,
+                "pr.number": str(pr.ref.pull_request_id),
                 "pr.source_commit": pr.source_commit,
                 "pr.scm": pr.ref.scm,
                 "config.fingerprint": config.fingerprint(),
@@ -577,6 +633,17 @@ def _tag_trace(pr: PullRequest, config: EffectiveConfig) -> None:
         )
     except Exception:  # tracing must never break a review
         logger.debug("Could not tag the current trace", exc_info=True)
+
+
+def _tag_outcome(values: dict[str, Any]) -> None:
+    """Record how the traced operation ended, as tags the console can read
+    without loading spans. Tags (unlike metadata) can be set at the end."""
+    try:
+        mlflow.update_current_trace(
+            tags={key: "" if value is None else str(value) for key, value in values.items()}
+        )
+    except Exception:  # tracing must never break a review
+        logger.debug("Could not tag the trace outcome", exc_info=True)
 
 
 def _current_trace_id() -> str | None:

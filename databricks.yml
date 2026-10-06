@@ -28,6 +28,12 @@ resources:
             value: "databricks-claude-sonnet-5-5"
           - name: PRREVIEW_SEVERITY_GATE
             value: "error"
+          # Admin console access (/console). Comma-separated emails; not
+          # editable from the console itself.
+          - name: PRREVIEW_CONSOLE_ADMINS
+            value: "k.phiri@decisioninc.com"
+          - name: PRREVIEW_CONSOLE_VIEWERS
+            value: ""
 
       # Resources this app is allowed to use.
       resources:

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from app.core.models import Finding
 
-SYSTEM_RULES = """\
+#: What the model is told about the task and how to judge it. Admins can
+#: replace this from the console (prompt name `apply_guidance`).
+GUIDANCE = """\
 You are a careful senior engineer applying already-approved code review
 findings to a file.
 
@@ -30,11 +32,17 @@ Rules:
 - If you cannot produce a safe, minimal fix for a finding — it is ambiguous,
   already fixed, or would require changes to a file you cannot see — leave
   that part of the file unchanged and still apply the others.
+"""
 
+#: The reply format the parser depends on. Always appended by code and never
+#: editable, so a guidance edit cannot break parsing.
+OUTPUT_CONTRACT = """\
 Return JSON only, matching exactly:
 {"file_content": "<the complete corrected file, as a single string>"}
 No markdown, no code fences, no commentary outside the JSON object.
 """
+
+SYSTEM_RULES = GUIDANCE.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
 
 
 def build_system_prompt() -> str:

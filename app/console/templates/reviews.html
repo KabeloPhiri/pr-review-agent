@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty, banner %}
+{% block title %}Reviews{% endblock %}
+{% block heading %}Reviews{% endblock %}
+{% block body %}
+{% if error %}{{ banner(error) }}{% endif %}
+{% if reviews %}
+<table class="data">
+  <caption>Most recent reviews first (up to 100)</caption>
+  <thead><tr>
+    <th scope="col">Time</th>
+    <th scope="col">Repository</th>
+    <th scope="col">Pull request</th>
+    <th scope="col">Result</th>
+    <th scope="col" class="num">Errors</th>
+    <th scope="col" class="num">Warnings</th>
+    <th scope="col" class="num">Info</th>
+    <th scope="col">Model</th>
+    <th scope="col" class="num">Tokens</th>
+    <th scope="col" class="num">Duration (s)</th>
+    <th scope="col">Trace</th>
+  </tr></thead>
+  <tbody>
+  {% for r in reviews %}
+    {% if r.failed %}{% set result, cls = "Failed to run", "status-error" %}
+    {% elif r.tag("passed") == "True" %}{% set result, cls = "Passed", "status-ok" %}
+    {% elif r.tag("passed") == "False" %}{% set result, cls = "Changes requested", "status-warn" %}
+    {% else %}{% set result, cls = "Unknown", "" %}{% endif %}
+    <tr>
+      <td>{{ r.timestamp_ms | ts }}</td>
+      <td>{{ r.repo or "n/a" }}</td>
+      <td>{% set url = pr_url(r.repo, r.pr) %}{% if url %}<a href="{{ url }}">#{{ r.pr }}</a>{% else %}{{ r.pr or "n/a" }}{% endif %}</td>
+      <td><span class="status {{ cls }}">{{ result }}</span></td>
+      <td class="num">{{ r.int_tag("errors") | num }}</td>
+      <td class="num">{{ r.int_tag("warnings") | num }}</td>
+      <td class="num">{{ r.int_tag("infos") | num }}</td>
+      <td>{% if r.model %}<code>{{ r.model }}</code>{% else %}n/a{% endif %}</td>
+      <td class="num">{{ r.total_tokens | num }}</td>
+      <td class="num">{{ (r.duration_ms / 1000) | secs }}</td>
+      <td>{% set t = trace_url(r.trace_id) %}{% if t %}<a href="{{ t }}">Open</a>{% else %}<code>{{ r.trace_id[:12] }}</code>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  {{ empty("No reviews in this range") }}
+{% endif %}
+{% endblock %}

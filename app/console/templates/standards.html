@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty, banner %}
+{% block title %}Standards{% endblock %}
+{% block heading %}Standards{% endblock %}
+{% block body %}
+{{ banner("Read-only in this release. Source: " ~ source ~ ".", "info") }}
+{% set current = {"repo": repo, "days": days} %}
+{% if docs %}
+<table class="data">
+  <caption>Each standard is an analyzer; it is added to the prompt for the files it applies to</caption>
+  <thead><tr>
+    <th scope="col">Name</th>
+    <th scope="col">Languages</th>
+    <th scope="col">Narrowed by</th>
+    <th scope="col">Applies to</th>
+  </tr></thead>
+  <tbody>
+  {% for doc in docs %}
+    <tr>
+      <td><a href="?{{ query(current, name=doc.name) }}" {% if selected and selected.name == doc.name %}aria-current="true"{% endif %}><code>{{ doc.name }}</code></a></td>
+      <td>{{ doc.languages | sort | join(", ") or "All" }}</td>
+      <td>
+        {% if doc.path_globs %}Paths: <code>{{ doc.path_globs | join(", ") }}</code>{% endif %}
+        {% if doc.content_pattern %}{% if doc.path_globs %}, {% endif %}Content: <code>{{ doc.content_pattern.pattern }}</code>{% endif %}
+        {% if not doc.narrowed %}n/a{% endif %}
+      </td>
+      <td>{{ "Every reviewed file" if doc.unscoped else "Matching files" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  {{ empty("No standards found") }}
+{% endif %}
+
+{% if selected %}
+<section aria-labelledby="doc-h" class="document">
+  <h2 id="doc-h"><code>{{ selected.name }}</code></h2>
+  <pre class="text">{{ selected.text }}</pre>
+</section>
+{% endif %}
+{% endblock %}

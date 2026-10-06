@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access denied - PR Review Console</title>
+  <link rel="stylesheet" href="/console/static/console.css">
+</head>
+<body class="standalone">
+  <main class="notice">
+    <h1>Access denied</h1>
+    <p>{% if email %}<strong>{{ email }}</strong> is not on the console's access list.{% else %}No signed-in identity was received with this request.{% endif %}</p>
+    <p>Console access is granted in the app's deployment configuration (<code>PRREVIEW_CONSOLE_ADMINS</code> or <code>PRREVIEW_CONSOLE_VIEWERS</code> in <code>databricks.yml</code>). Ask an administrator of the PR review app to add you.</p>
+  </main>
+</body>
+</html>

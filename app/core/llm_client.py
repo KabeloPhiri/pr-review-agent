@@ -11,6 +11,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import mlflow
+from mlflow.entities import SpanType
+from mlflow.tracing.constant import SpanAttributeKey, TokenUsageKey
+
 from app.core.errors import ReviewerError
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,19 @@ def complete(
         "response_format": {"type": "json_object"},
         "temperature": temperature,
     }
+    # One span per model call, carrying its token usage. MLflow totals these
+    # into the trace's `token_usage`, which the admin console reports per
+    # model and per repository. `asyncio.to_thread` copies context, so the
+    # span nests under the review's trace even though this runs in a thread.
+    with mlflow.start_span(name=f"llm:{model}", span_type=SpanType.CHAT_MODEL) as span:
+        span.set_attribute("model", model)
+        response = _create(client, model, messages, optional)
+        _record_usage(span, response)
+    return message_text(response.choices[0].message)
+
+
+def _create(client: Any, model: str, messages: list, optional: dict[str, Any]) -> Any:
+    """The call itself, retrying away optional parameters the endpoint rejects."""
     while True:
         try:
             response = client.chat.completions.create(
@@ -69,7 +86,25 @@ def complete(
                 ) from exc
             logger.info("Retrying %s without %s: %s", model, dropped, exc)
             optional.pop(dropped)
-    return message_text(response.choices[0].message)
+    return response
+
+
+def _record_usage(span: Any, response: Any) -> None:
+    """Copy the OpenAI-style `usage` block onto the span, if there is one."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0) or input_tokens + output_tokens
+    span.set_attribute(
+        SpanAttributeKey.CHAT_USAGE,
+        {
+            TokenUsageKey.INPUT_TOKENS: input_tokens,
+            TokenUsageKey.OUTPUT_TOKENS: output_tokens,
+            TokenUsageKey.TOTAL_TOKENS: total,
+        },
+    )
 
 
 def _rejected_parameter(exc: Exception, optional: dict[str, Any]) -> str | None:

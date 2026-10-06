@@ -26,6 +26,7 @@ from mlflow.genai.agent_server import AgentServer, setup_mlflow_git_based_versio
 # Importing the agent module registers the @invoke() handler with the server.
 import app.agent  # noqa: F401
 from app.api.routes import build_router
+from app.console import build_console_router
 from app.core.errors import PrReviewError
 from app.core.jobs import InMemoryJobStore, JobRunner
 
@@ -38,6 +39,8 @@ app = agent_server.app
 job_runner = JobRunner(InMemoryJobStore())
 app.state.job_runner = job_runner
 app.include_router(build_router(job_runner))
+# The admin console. Access is checked per request (app/console/auth.py).
+app.include_router(build_console_router(job_runner))
 
 
 @app.exception_handler(PrReviewError)

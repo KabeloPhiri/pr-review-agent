@@ -1,0 +1,42 @@
+{% macro kpi(label, value, note=None) -%}
+<div class="kpi">
+  <div class="kpi-value">{{ value }}</div>
+  <div class="kpi-label">{{ label }}</div>
+  {% if note %}<div class="kpi-note">{{ note }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro empty(message, hint=None) -%}
+<div class="empty">
+  <p class="empty-title">{{ message }}</p>
+  {% if hint %}<p class="empty-hint">{{ hint }}</p>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro banner(message, kind="error") -%}
+<div class="banner banner-{{ kind }}" role="{{ 'alert' if kind == 'error' else 'status' }}">{{ message }}</div>
+{%- endmacro %}
+
+{# Vertical bar chart drawn on the server: no scripts, readable in both themes. #}
+{% macro bar_chart(series, label, unit) -%}
+{% set width = 720 %}{% set height = 180 %}{% set pad_left = 64 %}{% set pad_bottom = 24 %}
+{% set plot_w = width - pad_left %}{% set plot_h = height - pad_bottom - 8 %}
+{% set peak = (series | map(attribute=1) | max) if series else 0 %}
+{% set step = plot_w / (series | length) if series else 0 %}
+<figure class="chart">
+  <svg viewBox="0 0 {{ width }} {{ height }}" role="img" aria-label="{{ label }}" preserveAspectRatio="none">
+    <line class="axis" x1="{{ pad_left }}" y1="{{ 8 + plot_h }}" x2="{{ width }}" y2="{{ 8 + plot_h }}"/>
+    <text class="tick" x="{{ pad_left - 8 }}" y="14" text-anchor="end">{{ peak | num }}</text>
+    <text class="tick" x="{{ pad_left - 8 }}" y="{{ 8 + plot_h }}" text-anchor="end">0</text>
+    {% for day, value in series %}
+      {% set h = (value / peak * plot_h) if peak else 0 %}
+      <rect class="bar" x="{{ pad_left + loop.index0 * step + step * 0.15 }}" y="{{ 8 + plot_h - h }}"
+            width="{{ step * 0.7 }}" height="{{ h }}"><title>{{ day }}: {{ value | num }} {{ unit }}</title></rect>
+      {% if loop.first or loop.last or (series | length) <= 14 %}
+      <text class="tick" x="{{ pad_left + loop.index0 * step + step / 2 }}" y="{{ height - 6 }}" text-anchor="middle">{{ day[5:] }}</text>
+      {% endif %}
+    {% endfor %}
+  </svg>
+  <figcaption>{{ label }} ({{ unit }}), UTC days</figcaption>
+</figure>
+{%- endmacro %}

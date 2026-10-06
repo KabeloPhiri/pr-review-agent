@@ -127,6 +127,11 @@ class JobRunner:
             job.touch(JobStatus.FAILED)
         await self.store.save(job)
 
+    @property
+    def running_count(self) -> int:
+        """Background jobs still running in this process (the admin console)."""
+        return len(self._tasks)
+
     async def wait_for(self, job_id: str, timeout: float, interval: float = 0.5) -> Job | None:
         """Poll until the job reaches a terminal state or `timeout` elapses.
 

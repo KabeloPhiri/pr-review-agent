@@ -12,7 +12,9 @@ from __future__ import annotations
 from app.services.review.base import ReviewContext
 from app.services.review.chunking import ReviewChunk
 
-SYSTEM_RULES = """\
+#: What the model is told about the task and how to judge it. Admins can
+#: replace this from the console (prompt name `review_guidance`).
+GUIDANCE = """\
 You are a meticulous senior code reviewer for a data engineering team.
 You review a unified diff from a pull request and report concrete defects and
 standards violations in the CHANGED lines.
@@ -40,13 +42,19 @@ Severity:
   standards call a blocker. This can fail the build.
 - "warning": a real problem that should be fixed but does not break anything.
 - "info": a suggestion or a question for the author.
+"""
 
+#: The reply format the parser depends on. Always appended by code and never
+#: editable, so a guidance edit cannot break parsing.
+OUTPUT_CONTRACT = """\
 Return JSON only, matching exactly:
 {"findings": [{"line": <int>, "end_line": <int or null>, "severity": "error|warning|info",
   "rule_id": "<short.kebab.id>", "message": "<what is wrong and why it matters>",
   "suggestion": "<concrete fix, code snippet if short>"}]}
 No markdown, no code fences, no commentary outside the JSON object.
 """
+
+SYSTEM_RULES = GUIDANCE.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
 
 
 def build_system_prompt(chunk: ReviewChunk, context: ReviewContext) -> str:
