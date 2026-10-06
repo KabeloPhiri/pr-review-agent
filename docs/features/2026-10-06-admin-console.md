@@ -163,3 +163,30 @@ comments carry no model and older reviews no per-rule counts, so those show
 "unknown"/are not in the denominator). Rule families are the first segment
 of the model-invented rule id, which usually but not always names a
 standard.
+
+## Update 2026-10-06 — fixes from the AI review of #16
+
+The AI review on #16 (once retargeted to `master`) found one error and
+several real problems; fixed on `feature/admin-console` and carried up to
+parts 2 and 3 with merge commits (no force pushes):
+
+- Truncation warning judged before the repository filter (the error).
+- Overview and Repositories count applied suggestions the same way.
+- A slug without `#` is no longer turned into a broken repository name.
+- `RepoKey.parse` splits by the SCM's segment count, so names with `__`
+  round-trip.
+- Trace links URL-encode the id; the scheme check needs `http(s)://`.
+- The repository sort test checks both directions (it could not fail
+  before; confirmed by disabling sorting).
+- **Blocking I/O on the event loop.** Console handlers did MLflow queries
+  and volume I/O synchronously in `async` handlers, stalling `/review` and
+  background reviews in the same process. Part 1 moves the trace query to a
+  worker thread; part 2 runs every console handler on its own event loop in
+  a worker thread (`ConsoleContext.guarded`), so no page can stall the API.
+  Tests pair a slow page with a trivial endpoint: before, it waited 1.01s
+  (trace query) and 5.76s (settings page); after, it answers at once. Live
+  on dev: the Model page took 6.97s while `/review/<id>` answered in 0.81s.
+
+Re-review of #16 after the first round: 0 errors, 8 warnings, 12 info
+(remaining items are style or judgement calls). Tests: 202 / 265 / 287 for
+parts 1 / 2 / 3.
