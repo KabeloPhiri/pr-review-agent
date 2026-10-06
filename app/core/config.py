@@ -48,7 +48,7 @@ class EffectiveConfig(BaseModel):
     analyzers: list[str] = Field(default_factory=list)
 
     # --- review model ---
-    model_endpoint: str = "databricks-llama-4-maverick"
+    model_endpoint: str = "databricks-claude-sonnet-5-5"
     temperature: float = 0.0
     max_chunk_chars: int = 12000
 

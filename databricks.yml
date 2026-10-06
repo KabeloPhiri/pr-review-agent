@@ -25,7 +25,7 @@ resources:
           - name: PRREVIEW_SCM
             value: "github"
           - name: PRREVIEW_MODEL_ENDPOINT
-            value: "databricks-llama-4-maverick"
+            value: "databricks-claude-sonnet-5-5"
           - name: PRREVIEW_SEVERITY_GATE
             value: "error"
 
@@ -40,7 +40,7 @@ resources:
         - name: 'review-model'
           serving_endpoint:
             # Must match PRREVIEW_MODEL_ENDPOINT above.
-            name: 'databricks-llama-4-maverick'
+            name: 'databricks-claude-sonnet-5-5'
             permission: 'CAN_QUERY'
       # Who may call the app. Declared here (not set by hand in the UI) so the
       # grants survive the app being deleted and recreated. This list replaces

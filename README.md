@@ -57,7 +57,7 @@ request, so a misconfigured repo is one call away from being explained.
 ```yaml
 # .prreview/config.yaml
 analyzers: [python, pyspark, sql]
-model_endpoint: databricks-llama-4-maverick
+model_endpoint: databricks-claude-sonnet-5-5
 severity_gate: error          # error | warning | none
 max_findings_per_file: 10
 exclude_paths: ["**/*.ipynb", "tests/fixtures/**"]

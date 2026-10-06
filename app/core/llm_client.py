@@ -41,29 +41,49 @@ def complete(
     user_prompt: str,
     temperature: float,
 ) -> str:
-    """One chat-completion call, with the response-format fallback every
-    endpoint needs: not every serving endpoint supports `response_format`,
-    and the prompt already demands bare JSON, so retry without it before
-    failing outright.
+    """One chat-completion call, dropping optional parameters the endpoint
+    rejects. Not every serving endpoint supports `response_format`, and newer
+    Anthropic models on Databricks also reject `temperature` (400 "does not
+    support the temperature parameter"). The prompt already demands bare
+    JSON, so each optional parameter is retried away before failing outright.
     """
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
-    try:
-        response = client.chat.completions.create(
-            **kwargs, response_format={"type": "json_object"}
-        )
-    except Exception as exc:
-        logger.info("Retrying without response_format: %s", exc)
+    optional: dict[str, Any] = {
+        "response_format": {"type": "json_object"},
+        "temperature": temperature,
+    }
+    while True:
         try:
-            response = client.chat.completions.create(**kwargs)
-        except Exception as inner:
-            raise ReviewerError(
-                f"Model endpoint {model!r} call failed", detail=str(inner)
-            ) from inner
+            response = client.chat.completions.create(
+                model=model, messages=messages, **optional
+            )
+            break
+        except Exception as exc:
+            dropped = _rejected_parameter(exc, optional)
+            if dropped is None:
+                raise ReviewerError(
+                    f"Model endpoint {model!r} call failed", detail=str(exc)
+                ) from exc
+            logger.info("Retrying %s without %s: %s", model, dropped, exc)
+            optional.pop(dropped)
     return message_text(response.choices[0].message)
+
+
+def _rejected_parameter(exc: Exception, optional: dict[str, Any]) -> str | None:
+    """Which optional parameter to drop after `exc`, or None to give up.
+
+    `temperature` only when the error names it, since a deterministic review
+    is worth keeping wherever the endpoint allows it. `response_format` on any
+    other error, as before: endpoints word that rejection too many ways.
+    """
+    if "temperature" in optional and "temperature" in str(exc).lower():
+        return "temperature"
+    if "response_format" in optional:
+        return "response_format"
+    return None
 
 
 def message_text(message: Any) -> str:

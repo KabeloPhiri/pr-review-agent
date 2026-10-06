@@ -8,7 +8,7 @@ reviewer: llm
 # Set an explicit list here or in a repo's .prreview/config.yaml to narrow it.
 analyzers: []
 
-model_endpoint: databricks-llama-4-maverick
+model_endpoint: databricks-claude-sonnet-5-5
 temperature: 0.0
 max_chunk_chars: 12000
 
