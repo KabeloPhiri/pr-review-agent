@@ -42,6 +42,16 @@ resources:
             # Must match PRREVIEW_MODEL_ENDPOINT above.
             name: 'databricks-llama-4-maverick'
             permission: 'CAN_QUERY'
+      # Who may call the app. Declared here (not set by hand in the UI) so the
+      # grants survive the app being deleted and recreated. This list replaces
+      # the app's ACL on deploy, so the owner is listed explicitly.
+      permissions:
+        - level: CAN_MANAGE
+          user_name: k.phiri@decisioninc.com
+        # pr-review-github-ci: the service principal GitHub Actions uses to
+        # get an OAuth token for pr-review.yml / pr-apply.yml.
+        - level: CAN_USE
+          service_principal_name: eaf382c6-9e28-4ddb-9754-472edc184a2b
 
 targets:
   dev:
