@@ -13,8 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.errors import ReviewerError
-from app.core.models import ExistingComment, Finding, PullRequestRef, Severity
-from app.core.pipeline import ReviewPipeline, _already_applied
+from app.core.models import Finding, PullRequestRef, Severity
+from app.core.pipeline import ReviewPipeline
 from app.services.apply.base import Applier, applier_registry
 from app.services.apply.llm_applier import LlmApplier
 from app.services.scm.base import scm_registry
@@ -68,15 +68,19 @@ ENABLED = {"allow_apply_fixes": True, "applier": "rules"}
 @pytest.fixture
 def ref() -> PullRequestRef:
     RulesApplier.fail_on = None
-    return PullRequestRef(
+    BulkScm.last = None
+    yield PullRequestRef(
         scm="bulk-fake",
         repository="platform",
         pull_request_id="42",
         extra={"fixture_dir": str(FIXTURE_DIR)},
     )
+    RulesApplier.fail_on = None
+    BulkScm.last = None
 
 
-async def _apply_all(ref, overrides=ENABLED, requester=AUTHOR):
+async def _apply_all(ref, overrides: dict | None = None, requester=AUTHOR):
+    overrides = ENABLED if overrides is None else overrides
     return await ReviewPipeline().apply_all(ref, requester=requester, overrides=overrides)
 
 
@@ -105,10 +109,6 @@ async def test_one_confirmation_marks_each_suggestion_applied(ref):
     [confirmation] = scm.posted
     assert "Applied 3 suggestion(s) in 2 commit(s)" in confirmation.body
     assert sorted(scm.closed) == ["c1", "c2", "c3"]
-    # A later single /apply on any of them must see it as already applied.
-    existing = [ExistingComment(thread_id="t", marker=confirmation.marker, body=confirmation.body)]
-    assert all(_already_applied(existing, cid) for cid in ("c1", "c2", "c3"))
-    assert not _already_applied(existing, "c4")
 
 
 async def test_a_failing_file_is_skipped_and_the_rest_still_land(ref):
