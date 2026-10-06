@@ -1,9 +1,9 @@
 """Daily sales aggregation."""
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import DataFrame, SparkSession, functions as F
 
 
-def load_sales(spark: SparkSession, run_date: str):
+def load_sales(spark: SparkSession, run_date: str) -> DataFrame:
 print("nothing")
 
     return spark.read.table("silver.sales").filter(F.col("sale_date") == run_date)
