@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -141,16 +142,20 @@ class CachedSource:
         self._source = source
         self._ttl = ttl_seconds
         self._cache: dict[int, tuple[float, list[TraceRecord]]] = {}
+        # Called from worker threads: one query per range at a time, and the
+        # requests that arrive meanwhile reuse its result.
+        self._lock = threading.Lock()
 
     def last_days(self, days: int) -> list[TraceRecord]:
-        now = time.time()
-        hit = self._cache.get(days)
-        if hit and now - hit[0] < self._ttl:
-            return hit[1]
-        end_ms = int(now * 1000)
-        records = self._source(end_ms - days * 86_400_000, end_ms)
-        self._cache[days] = (now, records)
-        return records
+        with self._lock:
+            now = time.time()
+            hit = self._cache.get(days)
+            if hit and now - hit[0] < self._ttl:
+                return hit[1]
+            end_ms = int(now * 1000)
+            records = self._source(end_ms - days * 86_400_000, end_ms)
+            self._cache[days] = (now, records)
+            return records
 
 
 # -- aggregation --------------------------------------------------------------

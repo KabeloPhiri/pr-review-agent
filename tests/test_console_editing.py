@@ -291,3 +291,46 @@ def test_audit_log_lists_every_change(client, store):
 def test_settings_pages_carry_no_icons_or_emoji(client, store, path):
     html = client.get(path, headers=ADMIN).text
     assert not ORNAMENT.findall(html), path
+
+
+async def test_a_slow_settings_store_does_not_stall_other_requests(store, monkeypatch):
+    """Every console handler runs off the server's event loop, so slow volume
+    I/O on a settings page cannot hold up the review API."""
+    import asyncio
+    import time
+
+    import httpx
+
+    real_read = store._read
+
+    def slow_read(path):
+        time.sleep(0.8)  # a slow volume
+        return real_read(path)
+
+    monkeypatch.setattr(store, "_read", slow_read)
+    app = FastAPI()
+    app.include_router(
+        build_console_router(JobRunner(InMemoryJobStore()), trace_source=lambda s, e: [])
+    )
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        started = time.monotonic()
+        page = asyncio.create_task(client.get(f"/console/config?repo={REPO}", headers=ADMIN))
+        await asyncio.sleep(0.1)
+        assert (await client.get("/ping")).status_code == 200
+        ping_seconds = time.monotonic() - started
+        assert (await page).status_code == 200
+
+    assert ping_seconds < 0.5, f"/ping waited {ping_seconds:.2f}s behind the settings store"
+
+
+def test_form_posts_still_work_when_handled_off_the_event_loop(client, store):
+    """The body is read on the server loop and reused by the handler."""
+    response = _post(client, f"/console/config?repo={REPO}", {"text": "max_files: 6"})
+    assert response.status_code == 303
+    assert store.raw("repos/github/acme__payments/config.yaml") == "max_files: 6"
