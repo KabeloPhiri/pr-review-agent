@@ -17,5 +17,5 @@ def tag_store(store_id: str, tags: list[str] | None = None) -> list[str]:
 def average_basket(totals: list[float]) -> float:
     try:
         return sum(totals) / len(totals)
-    except:
+    except ZeroDivisionError:
         return 0.0
