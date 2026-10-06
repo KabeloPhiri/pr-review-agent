@@ -1,0 +1,92 @@
+# CI/CD for apps/bank-statement-classifier (Databricks Asset Bundle).
+# - pull_request -> secret scan, unit tests, bundle validate
+# - push main    -> deploy to dev
+# - tag v*       -> deploy to uat, then prod behind a required-reviewer environment gate
+# Hosts and credentials come from repository/environment secrets - never from the repo.
+name: bank-statement-app
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: [ "apps/bank-statement-classifier/**", ".github/workflows/bank-statement-app.yml" ]
+  push:
+    branches: [ main ]
+    paths: [ "apps/bank-statement-classifier/**" ]
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/bank-statement-classifier
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -r requirements-dev.txt
+      - name: Secret scan (fail on findings)
+        shell: pwsh
+        working-directory: .
+        run: ./tools/Find-Secrets.ps1 -Path apps/bank-statement-classifier -FailOnFindings -Quiet
+      - name: Unit tests
+        run: pytest tests -q
+      - uses: databricks/setup-cli@main
+      - name: Bundle validate
+        env:
+          DATABRICKS_HOST: ${{ secrets.DEV_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DEV_SP_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DEV_SP_CLIENT_SECRET }}
+        run: databricks bundle validate -t dev
+
+  deploy-dev:
+    if: github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - env:
+          DATABRICKS_HOST: ${{ secrets.DEV_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DEV_SP_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DEV_SP_CLIENT_SECRET }}
+        run: |
+          databricks bundle deploy -t dev
+          databricks bundle run setupTables -t dev --params appServicePrincipal="${{ vars.DEV_APP_SP_CLIENT_ID }}"
+
+  deploy-uat:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - env:
+          DATABRICKS_HOST: ${{ secrets.UAT_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.UAT_SP_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.UAT_SP_CLIENT_SECRET }}
+        run: |
+          databricks bundle deploy -t uat --var="uatHost=${{ secrets.UAT_DATABRICKS_HOST }}" --var="uatServicePrincipal=${{ secrets.UAT_SP_CLIENT_ID }}" --var="warehouseId=${{ vars.UAT_WAREHOUSE_ID }}"
+          databricks bundle run setupTables -t uat --var="uatHost=${{ secrets.UAT_DATABRICKS_HOST }}" --var="uatServicePrincipal=${{ secrets.UAT_SP_CLIENT_ID }}" --var="warehouseId=${{ vars.UAT_WAREHOUSE_ID }}" --params appServicePrincipal="${{ vars.UAT_APP_SP_CLIENT_ID }}"
+
+  deploy-prod:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: deploy-uat
+    runs-on: ubuntu-latest
+    environment: prod          # configure required reviewers on this environment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - env:
+          DATABRICKS_HOST: ${{ secrets.PROD_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.PROD_SP_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.PROD_SP_CLIENT_SECRET }}
+        run: |
+          databricks bundle deploy -t prod --var="prodHost=${{ secrets.PROD_DATABRICKS_HOST }}" --var="prodServicePrincipal=${{ secrets.PROD_SP_CLIENT_ID }}" --var="warehouseId=${{ vars.PROD_WAREHOUSE_ID }}"
+          databricks bundle run setupTables -t prod --var="prodHost=${{ secrets.PROD_DATABRICKS_HOST }}" --var="prodServicePrincipal=${{ secrets.PROD_SP_CLIENT_ID }}" --var="warehouseId=${{ vars.PROD_WAREHOUSE_ID }}" --params appServicePrincipal="${{ vars.PROD_APP_SP_CLIENT_ID }}"
