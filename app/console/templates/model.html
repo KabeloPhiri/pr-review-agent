@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% from "_macros.html" import kpi, banner, scope_switch, store_banner, saved_line, field_error %}
+{% block title %}Model{% endblock %}
+{% block heading %}Model{% endblock %}
+{% block body %}
+{% set current_filters = {"repo": repo, "days": days} %}
+{% if error %}{{ banner(error) }}{% endif %}
+{{ store_banner(store_editable, store_location, store_problem, can_edit) }}
+{{ scope_switch(scope, repo, current_filters) }}
+
+<section aria-labelledby="current-h">
+  <h2 id="current-h">Review model</h2>
+  <div class="kpis">
+    {{ kpi("Current model", current) }}
+    {{ kpi("Set by", current_source) }}
+    {% if baseline %}
+      {{ kpi("Average tokens per review", baseline.tokens | num, baseline.reviews ~ " recent reviews on this model") }}
+      {{ kpi("Average duration (s)", baseline.seconds | secs) }}
+    {% endif %}
+  </div>
+  {{ saved_line(saved) }}
+
+  <form method="post" class="panel" action="/console/model?{{ query(current_filters) }}">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <fieldset>
+      <legend>Choose a model</legend>
+      {{ field_error(form_error) }}
+      <table class="data">
+        <thead><tr>
+          <th scope="col">Select</th>
+          <th scope="col">Serving endpoint</th>
+          <th scope="col">State</th>
+        </tr></thead>
+        <tbody>
+        {% for m in models %}
+          <tr>
+            <td><input type="radio" id="m-{{ loop.index }}" name="model" value="{{ m.name }}"
+                       {% if m.name == (tested_model or current) %}checked{% endif %}></td>
+            <td><label for="m-{{ loop.index }}"><code>{{ m.name }}</code></label>{% if m.name == current %} <span class="tag">current</span>{% endif %}</td>
+            <td><span class="status {{ 'status-ok' if m.state == 'Ready' else 'status-warn' }}">{{ m.state }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="hint">Only models the app has query access to are listed (PRREVIEW_ALLOWED_MODELS in databricks.yml).</p>
+      <div class="actions">
+        <button type="submit" class="button secondary" formaction="/console/model/test?{{ query(current_filters) }}">Test on the sample pull request</button>
+        {% if can_edit %}<button type="submit" class="button">Save</button>{% endif %}
+      </div>
+    </fieldset>
+  </form>
+</section>
+
+{% if test %}
+<section aria-labelledby="test-h">
+  <h2 id="test-h">Test result: <code>{{ tested_model }}</code></h2>
+  {% if test.ok %}
+    <div class="kpis">
+      {{ kpi("Duration (s)", test.seconds | secs) }}
+      {{ kpi("Tokens", test.tokens | num) }}
+      {{ kpi("Findings", test.findings | num, test.errors ~ " errors, " ~ test.warnings ~ " warnings, " ~ test.infos ~ " info") }}
+    </div>
+    {% for note in test.notes %}{{ banner(note, "warning") }}{% endfor %}
+    {% if test.sample %}
+    <table class="data">
+      <caption>First findings on the sample pull request (nothing was posted)</caption>
+      <thead><tr><th scope="col">File</th><th scope="col" class="num">Line</th><th scope="col">Severity</th><th scope="col">Message</th></tr></thead>
+      <tbody>
+      {% for f in test.sample %}
+        <tr><td><code>{{ f.file }}</code></td><td class="num">{{ f.line or "n/a" }}</td><td>{{ f.severity | capitalize }}</td><td>{{ f.message }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% else %}
+    {{ banner("The test review failed: " ~ test.error) }}
+  {% endif %}
+</section>
+{% endif %}
+
+<section aria-labelledby="prices-h">
+  <h2 id="prices-h">Prices</h2>
+  <p class="hint">USD per one million tokens, used for the cost figures. Prices apply to every repository.</p>
+  <form method="post" class="panel" action="/console/model/prices?{{ query(current_filters) }}">
+    {{ field_error(price_error) }}
+    <table class="data">
+      <thead><tr>
+        <th scope="col">Serving endpoint</th>
+        <th scope="col" class="num">Input (USD per 1M)</th>
+        <th scope="col" class="num">Output (USD per 1M)</th>
+      </tr></thead>
+      <tbody>
+      {% for m in models %}
+        {% set p = model_prices.get(m.name, {}) %}
+        <tr>
+          <td><code>{{ m.name }}</code></td>
+          <td class="num"><input class="num-input" type="text" inputmode="decimal" name="input:{{ m.name }}" value="{{ p.get('input', '') }}" aria-label="Input price for {{ m.name }}" {% if not can_edit %}readonly{% endif %}></td>
+          <td class="num"><input class="num-input" type="text" inputmode="decimal" name="output:{{ m.name }}" value="{{ p.get('output', '') }}" aria-label="Output price for {{ m.name }}" {% if not can_edit %}readonly{% endif %}></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if can_edit %}<div class="actions"><button type="submit" class="button">Save prices</button></div>{% endif %}
+  </form>
+</section>
+{% endblock %}

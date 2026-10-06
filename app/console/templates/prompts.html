@@ -1,15 +1,33 @@
 {% extends "base.html" %}
-{% from "_macros.html" import banner %}
+{% from "_macros.html" import store_banner, saved_line, field_error %}
 {% block title %}Prompts{% endblock %}
 {% block heading %}Prompts{% endblock %}
 {% block body %}
-{{ banner("Read-only in this release. The guidance becomes editable in the Control release; the output format is fixed in code so the reply parser cannot be broken by an edit.", "info") }}
+{% set current_filters = {"repo": repo, "days": days} %}
+{{ store_banner(store_editable, store_location, store_problem, can_edit) }}
+<p class="hint">Prompt guidance applies to every repository. The output format is fixed in code, so an edit cannot break how replies are read.</p>
 {% for p in prompts %}
 <section aria-labelledby="{{ p.name }}-h" class="document">
   <h2 id="{{ p.name }}-h">{{ p.title }} prompt</h2>
   <p class="meta">Guidance source: {{ "Console" if p.overridden else "Bundled with the app" }}</p>
+  {{ saved_line(p.saved) }}
+  {% if can_edit %}
+  <form method="post" class="panel" action="/console/prompts?{{ query(current_filters) }}">
+    <input type="hidden" name="name" value="{{ p.name }}">
+    <label for="{{ p.name }}-text">Guidance</label>
+    {{ field_error((errors or {}).get(p.name)) }}
+    <textarea id="{{ p.name }}-text" name="text" rows="18" spellcheck="false">{{ p.guidance }}</textarea>
+    <div class="actions">
+      <button type="submit" class="button">Save</button>
+      {% if p.overridden %}
+      <button type="submit" class="button secondary" formaction="/console/prompts/reset?{{ query(current_filters) }}">Reset to bundled</button>
+      {% endif %}
+    </div>
+  </form>
+  {% else %}
   <h3>Guidance</h3>
   <pre class="text">{{ p.guidance }}</pre>
+  {% endif %}
   <h3>Output format (fixed)</h3>
   <pre class="text muted">{{ p.contract }}</pre>
 </section>

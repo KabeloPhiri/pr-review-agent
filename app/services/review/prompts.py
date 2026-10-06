@@ -9,6 +9,7 @@ plain Python files.
 
 from __future__ import annotations
 
+from app.core.settings_store import get_settings_store
 from app.services.review.base import ReviewContext
 from app.services.review.chunking import ReviewChunk
 
@@ -57,8 +58,14 @@ No markdown, no code fences, no commentary outside the JSON object.
 SYSTEM_RULES = GUIDANCE.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
 
 
+def system_rules() -> str:
+    """Guidance (the admin console's, if set) followed by the fixed contract."""
+    guidance = get_settings_store().prompt("review_guidance") or GUIDANCE
+    return guidance.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
+
+
 def build_system_prompt(chunk: ReviewChunk, context: ReviewContext) -> str:
-    parts = [SYSTEM_RULES.strip()]
+    parts = [system_rules()]
 
     standards = context.standards.for_analyzers(chunk.analyzers)
     if standards:

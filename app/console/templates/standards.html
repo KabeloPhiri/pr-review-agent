@@ -1,13 +1,25 @@
 {% extends "base.html" %}
-{% from "_macros.html" import empty, banner %}
+{% from "_macros.html" import empty, banner, scope_switch, store_banner, saved_line, field_error %}
 {% block title %}Standards{% endblock %}
 {% block heading %}Standards{% endblock %}
 {% block body %}
-{{ banner("Read-only in this release. Source: " ~ source ~ ".", "info") }}
-{% set current = {"repo": repo, "days": days} %}
-{% if docs %}
+{% set current_filters = {"repo": repo, "days": days} %}
+{% set scoped = dict(current_filters, scope=("global" if scope == "global" and repo else None)) %}
+{{ store_banner(store_editable, store_location, store_problem, can_edit) }}
+{{ scope_switch(scope, repo, current_filters) }}
+<p class="meta">Source: {{ source }}.
+{% if scope == "repo" %}These are added to the global standards for this repository's reviews.{% endif %}</p>
+
+{% if bundled and can_edit %}
+<form method="post" class="inline" action="/console/standards/import?{{ query(current_filters) }}">
+  <p class="hint">To edit the standards, first copy the bundled set into the console.</p>
+  <button type="submit" class="button">Copy bundled standards into the console</button>
+</form>
+{% endif %}
+
+{% if items %}
 <table class="data">
-  <caption>Each standard is an analyzer; it is added to the prompt for the files it applies to</caption>
+  <caption>Each standard is added to the prompt for the files it applies to</caption>
   <thead><tr>
     <th scope="col">Name</th>
     <th scope="col">Languages</th>
@@ -15,28 +27,49 @@
     <th scope="col">Applies to</th>
   </tr></thead>
   <tbody>
-  {% for doc in docs %}
+  {% for item in items %}
     <tr>
-      <td><a href="?{{ query(current, name=doc.name) }}" {% if selected and selected.name == doc.name %}aria-current="true"{% endif %}><code>{{ doc.name }}</code></a></td>
-      <td>{{ doc.languages | sort | join(", ") or "All" }}</td>
-      <td>
-        {% if doc.path_globs %}Paths: <code>{{ doc.path_globs | join(", ") }}</code>{% endif %}
-        {% if doc.content_pattern %}{% if doc.path_globs %}, {% endif %}Content: <code>{{ doc.content_pattern.pattern }}</code>{% endif %}
-        {% if not doc.narrowed %}n/a{% endif %}
-      </td>
-      <td>{{ "Every reviewed file" if doc.unscoped else "Matching files" }}</td>
+      <td><a href="?{{ query(scoped, name=item.name) }}" {% if selected == item.name %}aria-current="true"{% endif %}><code>{{ item.name }}</code></a></td>
+      <td>{{ item.languages }}</td>
+      <td>{{ item.narrowed }}</td>
+      <td>{{ item.applies }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 {% else %}
-  {{ empty("No standards found") }}
+  {{ empty("No standards for this repository yet" if scope == "repo" else "No standards found") }}
 {% endif %}
 
-{% if selected %}
+{% if can_edit and not bundled %}
+<p><a class="button secondary" href="?{{ query(scoped, new=1) }}">New standard</a></p>
+{% endif %}
+
+{% if selected or creating %}
 <section aria-labelledby="doc-h" class="document">
-  <h2 id="doc-h"><code>{{ selected.name }}</code></h2>
-  <pre class="text">{{ selected.text }}</pre>
+  <h2 id="doc-h">{% if selected %}<code>{{ selected }}</code>{% else %}New standard{% endif %}</h2>
+  {{ saved_line(saved) }}
+  {% if bundled or not can_edit %}
+    <pre class="text">{{ text }}</pre>
+  {% else %}
+  <form method="post" class="panel" action="/console/standards?{{ query(current_filters) }}">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    {{ field_error(form_error) }}
+    <label for="std-name">Name</label>
+    <input id="std-name" name="name" type="text" value="{{ selected or '' }}" {% if selected and not creating %}readonly{% endif %}
+           pattern="[a-z0-9][a-z0-9_-]*" required aria-describedby="std-name-hint">
+    <p id="std-name-hint" class="hint">Lowercase letters, digits, '-' and '_'. Front matter (between --- lines) sets which files it applies to.</p>
+    <label for="std-text">Content</label>
+    <textarea id="std-text" name="text" rows="22" spellcheck="false">{{ text }}</textarea>
+    <div class="actions">
+      <button type="submit" class="button">Save</button>
+      <a class="button secondary" href="?{{ query(scoped) }}">Cancel</a>
+      {% if selected and not creating %}
+      <button type="submit" class="button danger" formaction="/console/standards/delete?{{ query(current_filters) }}">Delete</button>
+      {% endif %}
+    </div>
+  </form>
+  {% endif %}
 </section>
 {% endif %}
 {% endblock %}

@@ -8,6 +8,7 @@ this call fixes known problems in one file, not surveying a diff for new ones.
 from __future__ import annotations
 
 from app.core.models import Finding
+from app.core.settings_store import get_settings_store
 
 #: What the model is told about the task and how to judge it. Admins can
 #: replace this from the console (prompt name `apply_guidance`).
@@ -46,7 +47,9 @@ SYSTEM_RULES = GUIDANCE.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
 
 
 def build_system_prompt() -> str:
-    return SYSTEM_RULES.strip()
+    """Guidance (the admin console's, if set) followed by the fixed contract."""
+    guidance = get_settings_store().prompt("apply_guidance") or GUIDANCE
+    return guidance.strip() + "\n\n" + OUTPUT_CONTRACT.strip()
 
 
 def build_user_prompt(file: str, current_text: str, finding: Finding | list[Finding]) -> str:

@@ -1,11 +1,29 @@
 {% extends "base.html" %}
-{% from "_macros.html" import banner %}
+{% from "_macros.html" import banner, scope_switch, store_banner, saved_line, field_error %}
 {% block title %}Config{% endblock %}
 {% block heading %}Config{% endblock %}
 {% block body %}
-{{ banner("Read-only in this release. A repository's own .prreview/config.yaml and per-request overrides are applied per review and are not shown here.", "info") }}
+{% set current_filters = {"repo": repo, "days": days} %}
+{{ store_banner(store_editable, store_location, store_problem, can_edit) }}
+{{ scope_switch(scope, repo, current_filters) }}
+
+{% if store_editable %}
+<section aria-labelledby="edit-h">
+  <h2 id="edit-h">Console settings, {{ "this repository" if scope == "repo" else "global" }}</h2>
+  <p class="hint">One setting per line as <code>key: value</code>. These override the app defaults and every repository's own <code>.prreview/config.yaml</code>{% if scope == "repo" %}, and the global console settings for this repository{% endif %}. Remove a line to fall back.</p>
+  {{ saved_line(saved) }}
+  <form method="post" class="panel" action="/console/config?{{ query(current_filters) }}">
+    <input type="hidden" name="scope" value="{{ scope }}">
+    <label for="config-text" class="visually-hidden">Settings</label>
+    {{ field_error(form_error) }}
+    <textarea id="config-text" name="text" rows="8" spellcheck="false" {% if not can_edit %}readonly{% endif %}>{{ text }}</textarea>
+    {% if can_edit %}<div class="actions"><button type="submit" class="button">Save</button></div>{% endif %}
+  </form>
+</section>
+{% endif %}
+
 <table class="data">
-  <caption>Effective configuration{{ " for " ~ repo if repo }}, and the layer each value comes from</caption>
+  <caption>Effective configuration{{ " for " ~ repo if scope == "repo" }}, and where each value comes from. A repository's own .prreview/config.yaml applies per review and is not shown.</caption>
   <thead><tr>
     <th scope="col">Setting</th>
     <th scope="col">Value</th>
@@ -16,7 +34,7 @@
     <tr>
       <td><code>{{ row.name }}</code></td>
       <td><code>{{ row.value }}</code></td>
-      <td>{{ row.source }}</td>
+      <td>{{ row.source }}{% if row.overrides_global %}, overrides global{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

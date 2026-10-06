@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% from "_macros.html" import banner %}
+{% block title %}{{ title }}{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block body %}
+{{ banner(message) }}
+{% endblock %}
