@@ -177,3 +177,13 @@ def test_console_beats_repo_and_request_and_pinned_beats_console():
 
     pinned = resolve(console_overrides={"model_endpoint": "a"}, pinned={"model_endpoint": "b"})
     assert pinned.model_endpoint == "b"
+@pytest.mark.parametrize(
+    "scm, slug",
+    [
+        ("github", "acme/my__repo"),
+        ("azure_devops", "contoso/data/etl__jobs"),
+    ],
+)
+def test_repo_names_containing_double_underscores_round_trip(scm, slug):
+    key = RepoKey(scm, slug)
+    assert RepoKey.parse(key.path) == key
