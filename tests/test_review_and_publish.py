@@ -245,3 +245,16 @@ async def test_user_prompt_carries_the_json_keyword(fixture_dir):
     chunk = build_chunks(diff, config)[0][0]
 
     assert "json" in build_user_prompt(chunk, context)
+
+
+async def test_publish_reports_a_renamed_rule_on_the_same_line_as_a_duplicate(pr):
+    scm = FakeScmConnector()
+    publisher = Publisher(scm, resolve())
+    await publisher.publish(pr, _result([_finding(severity=Severity.ERROR)]))
+    assert publisher.duplicates == []
+
+    renamed = _finding(severity=Severity.ERROR).model_copy(update={"rule_id": "renamed.rule"})
+    second = Publisher(scm, resolve())
+    await second.publish(pr, _result([renamed]))
+    [dup] = second.duplicates
+    assert dup["new"] == "renamed.rule" and dup["old"] != "renamed.rule"

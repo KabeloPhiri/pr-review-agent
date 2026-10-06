@@ -161,6 +161,9 @@ class Finding(BaseModel):
     suggestion: str | None = None
     source: str = "llm"
     language: str | None = None
+    #: Serving endpoint that produced the finding; recorded in the comment so
+    #: false-positive feedback can be attributed to the model that wrote it.
+    model: str | None = None
 
     def dedupe_key(self) -> tuple[str, int | None, str]:
         return (self.file, self.line, self.rule_id.strip().lower())
@@ -275,4 +278,21 @@ class BulkApplyResult(BaseModel):
     applied_comment_ids: list[str] = Field(default_factory=list)
     commit_shas: list[str] = Field(default_factory=list)
     skipped: list[SkippedSuggestion] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class FeedbackResult(BaseModel):
+    """Outcome of `/fp`: one bot finding flagged as a false positive.
+
+    Like `ApplyResult`, a refusal is soft (`recorded=False` with a `reason`).
+    What was recorded lives on the `pr_feedback` trace, which the admin
+    console aggregates into false-positive rates.
+    """
+
+    ref: PullRequestRef
+    recorded: bool
+    reason: str | None = None
+    rule_id: str | None = None
+    file: str | None = None
+    model: str | None = None
     warnings: list[str] = Field(default_factory=list)

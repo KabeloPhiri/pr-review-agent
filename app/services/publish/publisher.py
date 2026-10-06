@@ -15,6 +15,7 @@ from app.services.publish.formatter import (
     MARKER_PREFIX,
     SUMMARY_RULE,
     marker_for,
+    parse_finding_comment,
     render_finding,
     render_summary,
 )
@@ -27,6 +28,10 @@ class Publisher:
     def __init__(self, scm: ScmConnector, config: EffectiveConfig) -> None:
         self.scm = scm
         self.config = config
+        #: New findings posted on a line that already has an open bot comment
+        #: under a different rule id: almost always the model renaming a rule
+        #: between runs (see CLAUDE.md, marker caveat). Reported, not blocked.
+        self.duplicates: list[dict[str, str]] = []
 
     async def publish(self, pr: PullRequest, result: ReviewResult) -> int:
         """Post new comments, close stale ones, set the status. Returns posts."""
@@ -37,6 +42,11 @@ class Publisher:
 
         existing = await self.scm.list_comments(pr)
         existing_markers = {c.marker for c in existing if c.marker}
+        open_rules: dict[tuple[str, int], set[str]] = {}
+        for comment in existing:
+            parsed = parse_finding_comment(comment.body) if comment.body else None
+            if parsed and comment.file and comment.line and not comment.is_closed:
+                open_rules.setdefault((comment.file, comment.line), set()).add(parsed["rule_id"])
 
         posted = 0
         current_markers: set[str] = set()
@@ -47,6 +57,11 @@ class Publisher:
             current_markers.add(marker)
             if marker in existing_markers:
                 continue
+            for other in open_rules.get((finding.file, finding.line), set()) - {finding.rule_id}:
+                self.duplicates.append(
+                    {"file": finding.file, "line": str(finding.line), "old": other,
+                     "new": finding.rule_id}
+                )
             try:
                 await self.scm.post_comment(pr, render_finding(finding))
                 posted += 1
@@ -81,7 +96,9 @@ class Publisher:
             # `/apply` confirmations and replies are not findings; a re-review
             # must not collapse them (the confirmation is also what makes a
             # repeat /apply a no-op).
-            if marker.startswith((f"{MARKER_PREFIX}:applied:", f"{MARKER_PREFIX}:reply:")):
+            if marker.startswith(
+                (f"{MARKER_PREFIX}:applied:", f"{MARKER_PREFIX}:reply:", f"{MARKER_PREFIX}:fp:")
+            ):
                 continue
             if marker.startswith(f"{MARKER_PREFIX}:{SUMMARY_RULE}:") or marker in current_markers:
                 continue

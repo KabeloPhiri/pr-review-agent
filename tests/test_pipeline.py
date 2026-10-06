@@ -164,3 +164,16 @@ async def test_trace_records_repository_and_outcome_for_the_console(ref):
     assert info.tags["prreview.findings"] == "2"
     assert info.tags["prreview.errors"] == "1"
     assert info.tags["prreview.published"] == "False"
+
+
+async def test_trace_records_findings_per_rule_for_false_positive_rates(ref):
+    import json
+
+    import mlflow
+
+    result = await ReviewPipeline().run(ref, overrides={"reviewer": "stub"}, publish=False)
+    mlflow.flush_trace_async_logging()
+    tags = mlflow.get_trace(result.trace_id).info.tags
+
+    assert json.loads(tags["prreview.rules"]) == {"stub.python": 1, "stub.sql": 1}
+    assert tags["prreview.duplicates"] == "0"

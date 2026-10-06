@@ -28,6 +28,7 @@ def test_round_trips_a_finding_with_a_suggestion():
         "rule_id": "pyspark.collect",
         "message": "Avoid collect() on a full table scan.",
         "suggestion": "Use an aggregate instead:\n    df.agg(F.sum('amount'))",
+        "model": None,
     }
 
 
@@ -44,7 +45,25 @@ def test_round_trips_a_finding_without_a_suggestion():
         "rule_id": "naming.vars",
         "message": "Rename this.",
         "suggestion": None,
+        "model": None,
     }
+
+
+def test_round_trips_the_model_without_disturbing_the_marker():
+    """The model marker must come second: idempotency and /apply read the first."""
+    import re
+
+    finding = Finding(
+        file="a.py", line=3, severity=Severity.ERROR, rule_id="python.x", message="Fix.",
+        suggestion="do it", model="databricks-claude-sonnet-5-5",
+    )
+    draft = render_finding(finding)
+
+    parsed = parse_finding_comment(draft.body)
+    assert parsed["model"] == "databricks-claude-sonnet-5-5"
+    assert parsed["suggestion"] == "do it"
+    first = re.search(r"<!--\s*(prreview:[^\s>]+)\s*-->", draft.body).group(1)
+    assert first == draft.marker
 
 
 def test_round_trips_a_finding_reported_by_a_quality_tool():

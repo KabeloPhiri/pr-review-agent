@@ -6,6 +6,9 @@
 #   - reply `/apply` on one suggestion to apply that one;
 #   - comment `/apply all` on the pull request (or reply it in any bot
 #     thread) to apply every open suggestion — one commit per file.
+# Anyone with write access (or the PR author) can also reply `/fp [reason]`
+# on a bot comment to flag it as a false positive; the admin console
+# reports false-positive rates by rule, model and repository.
 # Note: GitHub runs `issue_comment` workflows from the default branch, so the
 # PR-level `/apply all` only works once this file is on it; the in-thread
 # reply form works from the PR's own copy.
@@ -59,7 +62,8 @@ jobs:
     if: |
       (github.event_name == 'pull_request_review_comment' &&
        github.event.comment.in_reply_to_id != null &&
-       startsWith(github.event.comment.body, '/apply')) ||
+       (startsWith(github.event.comment.body, '/apply') ||
+        startsWith(github.event.comment.body, '/fp'))) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
        startsWith(github.event.comment.body, '/apply all'))
@@ -75,6 +79,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.in_reply_to_id }}
           REQUESTER: ${{ github.event.comment.user.login }}
+          ASSOCIATION: ${{ github.event.comment.author_association }}
           # Passed through env, never interpolated into the script: it is
           # user-written text.
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -105,6 +110,17 @@ jobs:
           # hands back a job id rather than letting the app's ~120s
           # connection limit cut a long model call off mid-push.
           case "$COMMENT_BODY" in
+            "/fp"*)
+              # Flagging is quick (no model call), so the answer comes back
+              # directly; the rest of this script handles it like an apply.
+              ENDPOINT="$APP_URL/feedback"
+              REASON="${COMMENT_BODY#/fp}"
+              PAYLOAD=$(jq -n --arg repo "$REPO" --arg pr "$PR_NUMBER" \
+                --arg cid "$COMMENT_ID" --arg req "$REQUESTER" \
+                --arg assoc "$ASSOCIATION" --arg reason "$REASON" \
+                '{scm: "github", repository: $repo, pull_request_id: $pr,
+                  comment_id: $cid, requester: $req, association: $assoc,
+                  reason: $reason}') ;;
             "/apply all"*)
               ENDPOINT="$APP_URL/apply/all"
               PAYLOAD=$(jq -n --arg repo "$REPO" --arg pr "$PR_NUMBER" --arg req "$REQUESTER" \
@@ -161,6 +177,15 @@ jobs:
           fi
           if [ "$STATUS" != "completed" ]; then
             echo "::warning::Apply job $JOB_ID still running after 10 minutes."
+            exit 0
+          fi
+
+          if jq -e '.result | has("recorded")' response.json >/dev/null; then
+            if [ "$(jq -r '.result.recorded' response.json)" = "true" ]; then
+              echo "### AI code review: recorded a false positive ($(jq -r '.result.rule_id' response.json))" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "### AI code review: false positive not recorded ($(jq -r '.result.reason' response.json))" >> "$GITHUB_STEP_SUMMARY"
+            fi
             exit 0
           fi
 

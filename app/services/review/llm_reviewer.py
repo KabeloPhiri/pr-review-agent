@@ -152,6 +152,7 @@ class LlmReviewer(Reviewer):
                     suggestion=(item.suggestion or "").strip() or None,
                     source="llm",
                     language=chunk.language,
+                    model=self.config.model_endpoint,
                 )
             )
         return findings

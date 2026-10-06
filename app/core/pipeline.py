@@ -10,7 +10,9 @@ one module — never this file's shape.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections import Counter
 from typing import Any
 
 import mlflow
@@ -23,6 +25,7 @@ from app.core.models import (
     CommentDraft,
     Diff,
     ExistingComment,
+    FeedbackResult,
     Finding,
     PullRequest,
     PullRequestRef,
@@ -41,6 +44,10 @@ from app.services.review.chunking import build_chunks
 from app.services.scm import ScmConnector, get_connector
 
 logger = logging.getLogger(__name__)
+
+#: GitHub `author_association` values that may flag a finding as wrong
+#: besides the PR author: people with write access to the repository.
+_MAY_FLAG = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 #: How many times `apply()` re-reads the branch and regenerates a fix when the
 #: push is refused because the file changed meanwhile — typically another
@@ -132,8 +139,9 @@ class ReviewPipeline:
                 trace_id=_current_trace_id(),
             )
 
+            publisher = Publisher(scm, config)
             if publish:
-                await Publisher(scm, config).publish(pr, result)
+                await publisher.publish(pr, result)
             counts = result.counts_by_severity()
             _tag_outcome(
                 {
@@ -144,6 +152,10 @@ class ReviewPipeline:
                     "prreview.infos": counts["info"],
                     "prreview.files_reviewed": result.files_reviewed,
                     "prreview.published": publish,
+                    # Per-rule counts: the denominator of a false-positive rate.
+                    "prreview.rules": _rule_counts(findings),
+                    "prreview.duplicates": len(publisher.duplicates),
+                    "prreview.duplicate_rules": json.dumps(publisher.duplicates[:10]),
                 }
             )
             return result
@@ -211,6 +223,7 @@ class ReviewPipeline:
             finding = _bot_finding(config, source.author, source.body, source.file, source.line)
             if finding is None:
                 return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
+            _tag_outcome({"prreview.rule": finding.rule_id})
 
             # Keyed by the accepted comment, so a second `/apply` (or one
             # after `/apply all`) or a redelivered webhook cannot apply twice.
@@ -366,6 +379,7 @@ class ReviewPipeline:
                         continue
                     commit_shas.append(commit_sha)
                     applied += [(c, f, commit_sha) for c, f in items]
+                    _tag_outcome({"prreview.rules": _rule_counts([f for _, f, _ in applied])})
                     # The next file is read at the new head.
                     pr = await scm.get_pull_request(ref)
             finally:
@@ -394,6 +408,92 @@ class ReviewPipeline:
                 applied_comment_ids=[c.comment_id for c, _, _ in applied],
                 commit_shas=commit_shas,
                 skipped=skipped,
+                warnings=warnings,
+            )
+        finally:
+            await scm.aclose()
+
+    @mlflow.trace(name="pr_feedback")
+    async def feedback(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None = None,
+        comment_id: str,
+        requester: str,
+        association: str | None = None,
+        reason: str | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> FeedbackResult:
+        """Record that one of the bot's findings was a false positive (`/fp`).
+
+        Anyone who may change the code may say a finding is wrong: the PR
+        author, or a repository owner, member or collaborator (GitHub's
+        `author_association`, passed by the workflow). Only the bot's own
+        comments count, checked the same way as `/apply`. The record is this
+        trace, tagged with the rule, model and repository.
+        """
+        _redact_trace_inputs(ref, overrides, comment_id=comment_id, requester=requester)
+        scm = get_connector(ref.scm, token=scm_token)
+        try:
+            pr = await scm.get_pull_request(ref)
+            # Trusted bot identities come from the target branch, as for apply.
+            config = await self.resolve_config(
+                scm, pr.model_copy(update={"source_commit": pr.target_commit}), overrides
+            )
+            _tag_trace(pr, config)
+
+            def refuse(why: str) -> FeedbackResult:
+                return FeedbackResult(ref=ref, recorded=False, reason=why)
+
+            if requester != pr.author and (association or "").upper() not in _MAY_FLAG:
+                return refuse("unauthorized_requester")
+            source = await scm.get_comment(pr, comment_id)
+            if source is None or source.file is None:
+                return refuse("comment_not_found_or_unsupported")
+            finding = _bot_finding(config, source.author, source.body, source.file, source.line)
+            if finding is None:
+                return refuse("not_a_bot_suggestion")
+            marker = f"prreview:fp:{comment_id}"
+            if any(c.marker == marker or f"<!-- {marker} -->" in c.body
+                   for c in await scm.list_comments(pr)):
+                return refuse("already_recorded")
+
+            note = (reason or "").strip()[:500]
+            _tag_outcome(
+                {
+                    "prreview.feedback": "false_positive",
+                    "prreview.rule": finding.rule_id,
+                    "prreview.severity": finding.severity.value,
+                    "prreview.file": finding.file,
+                    "prreview.finding_model": finding.model or "unknown",
+                    "prreview.fp_reason": note,
+                    "prreview.flagged_by": requester,
+                }
+            )
+
+            warnings: list[str] = []
+            try:
+                await scm.reply_to_comment(
+                    pr,
+                    comment_id,
+                    "Recorded as a false positive"
+                    + (f": {note}" if note else "")
+                    + ". This feeds the reviewer's quality figures in the admin console."
+                    + f"\n\n<!-- {marker} -->",
+                )
+            except ScmError as exc:
+                warnings.append(f"could not reply on the comment ({exc.message})")
+            try:
+                await scm.close_comment(pr, source.thread_id)
+            except ScmError as exc:
+                warnings.append(f"could not resolve the comment ({exc.message})")
+            return FeedbackResult(
+                ref=ref,
+                recorded=True,
+                rule_id=finding.rule_id,
+                file=finding.file,
+                model=finding.model,
                 warnings=warnings,
             )
         finally:
@@ -567,7 +667,14 @@ def _bot_finding(
         rule_id=parsed["rule_id"],
         message=parsed["message"],
         suggestion=parsed["suggestion"],
+        model=parsed.get("model"),
     )
+
+
+def _rule_counts(findings: list[Finding], limit: int = 40) -> str:
+    """`{"rule": count}` as JSON, most frequent first, small enough for a tag."""
+    counts = Counter(f.rule_id for f in findings).most_common(limit)
+    return json.dumps(dict(counts))
 
 
 def _applied_marker(comment_id: str) -> str:

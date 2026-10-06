@@ -23,6 +23,7 @@ PAGES = [
     "/console",
     "/console/repositories",
     "/console/reviews",
+    "/console/quality",
     "/console/config",
     "/console/standards",
     "/console/prompts",
@@ -156,3 +157,28 @@ def test_prompts_page_shows_guidance_and_the_fixed_output_format():
 def test_invalid_days_falls_back_to_the_default():
     html = _client().get("/console?days=999", headers=_as(ADMIN)).text
     assert "last 7 days" in html
+
+
+def test_false_positives_page_shows_rates_and_flags():
+    from app.console.analytics import FEEDBACK
+
+    records = RECORDS + [
+        TraceRecord(
+            trace_id="fb-1", kind=FEEDBACK, timestamp_ms=1_791_000_000_100, duration_ms=5,
+            state="OK", repo=A, pr="1", model="databricks-claude-sonnet-5-5",
+            tags={"prreview.feedback": "false_positive", "prreview.rule": "python.naming",
+                  "prreview.finding_model": "databricks-claude-sonnet-5-5",
+                  "prreview.fp_reason": "matches our convention", "prreview.flagged_by": "dev",
+                  "prreview.file": "a.py"},
+        ),
+        TraceRecord(
+            trace_id="rv-9", kind=REVIEW, timestamp_ms=1_791_000_000_050, duration_ms=5,
+            state="OK", repo=A, pr="1", model="databricks-claude-sonnet-5-5",
+            tags={"prreview.passed": "False", "prreview.findings": "4",
+                  "prreview.rules": '{"python.naming": 4}'},
+        ),
+    ]
+    html = _client(lambda s, e: records).get("/console/quality", headers=_as(ADMIN)).text
+    assert "matches our convention" in html
+    assert "25.0%" in html  # 1 flag over 4 posted
+    assert 'href="/console/standards?' in html  # the python family links to its standard
