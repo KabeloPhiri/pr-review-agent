@@ -97,3 +97,17 @@ Not deployed. Commits `2ea5651` (fix) and `206e394` (this note) are local on
 - The dev container needs `DATABRICKS_AUTH_STORAGE=plaintext` for every
   Databricks CLI call (no D-Bus/keyring); consider setting it in
   `.devcontainer/devcontainer.json` `containerEnv`.
+
+## Update 2026-10-06
+
+Enabled `/apply` on this repository itself:
+
+- `.github/workflows/pr-apply.yml` — copy of `pipelines/github/pr-apply.yml`
+  (identical content).
+- `.prreview/config.yaml` — `allow_apply_fixes: true`, `applier: llm`.
+  Resolves cleanly against `EffectiveConfig`. Read from the target branch for
+  `/apply`, so it applies only to PRs opened after this merges to `master`.
+- Reviews here are posted by `pr-pipeline.yml` with `GITHUB_TOKEN`
+  (`github-actions[bot]`), matching the default `apply_trusted_authors`.
+
+Manual step still required: add the `PR_REVIEW_APPLY_TOKEN` Actions secret.
