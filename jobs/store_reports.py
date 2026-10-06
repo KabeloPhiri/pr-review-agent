@@ -1,11 +1,12 @@
 """Store reporting helpers."""
 
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
 
 def stores_for_region(spark: SparkSession, region: str) -> DataFrame:
     """Stores in one region; `region` comes from the job's widget input."""
-    return spark.sql(f"SELECT * FROM gold.stores WHERE region = '{region}'")
+    return spark.table("gold.stores").where(F.col("region") == region)
 
 
 def tag_store(store_id: str, tags: list[str] | None = None) -> list[str]:
