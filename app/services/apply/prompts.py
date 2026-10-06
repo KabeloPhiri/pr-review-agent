@@ -7,6 +7,8 @@ this call fixes known problems in one file, not surveying a diff for new ones.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.core.models import Finding
 
 SYSTEM_RULES = """\
@@ -41,8 +43,7 @@ def build_system_prompt() -> str:
     return SYSTEM_RULES.strip()
 
 
-def build_user_prompt(file: str, current_text: str, finding: Finding | list[Finding]) -> str:
-    findings = finding if isinstance(finding, list) else [finding]
+def build_user_prompt(file: str, current_text: str, findings: Sequence[Finding]) -> str:
     lines = [f"File: {file}"]
     for number, item in enumerate(findings, start=1):
         lines += [
