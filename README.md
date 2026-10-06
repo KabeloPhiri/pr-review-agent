@@ -79,6 +79,7 @@ review.
 | `POST /review` | Run a review. `mode`: `auto` (default), `sync`, `async` |
 | `GET /review/{job_id}` | Poll a background review |
 | `POST /apply` | Accept one bot suggestion and push it as a commit (opt-in; see below) |
+| `GET /apply/{job_id}` | Poll a background apply |
 | `POST /config/effective` | Show the configuration a review would use |
 | `POST /invocations` | MLflow agent entry point; always synchronous |
 | `GET /health` | Health check (from the MLflow agent server) |
@@ -117,7 +118,9 @@ a commit on the PR's own branch.
 
 Two flags have to be set together in `.prreview/config.yaml` — `allow_apply_fixes`
 alone changes nothing, since the shipped `applier: noop` never produces a
-change:
+change. For `/apply` the file is read from the PR's **target** branch, not its
+source branch, so the opt-in has to be merged first — a pull request cannot
+turn on code-pushing for itself:
 
 ```yaml
 # .prreview/config.yaml
@@ -125,17 +128,23 @@ allow_apply_fixes: true
 applier: llm
 ```
 
-Only the **PR's own author** may trigger an apply — a reply from anyone else
-is a quiet no-op, not an error. The bot reconstructs the finding from its own
+Only the **PR's own author** may trigger an apply, only on a comment written
+by one of `apply_trusted_authors` (default `github-actions[bot]`, the identity
+`pr-review.yml` posts as — anyone can paste a lookalike comment), and never on
+a PR from a fork. Each of these, a second `/apply` on the same comment, and a
+file that changed on the branch after the bot read it are quiet no-ops with a
+`reason`, not errors. The bot reconstructs the finding from its own
 comment text (severity, rule, message, suggestion — the same trick that keeps
 `/review` idempotent, see "Re-runs are safe" below), regenerates the file with
 one model call, and pushes a single-file commit via the Contents API.
 
 **Testing the fix is not this app's job.** Pushing the commit re-triggers the
-existing `synchronize`-triggered `pr-review.yml` automatically, exactly as any
-other push would — and whatever test job already lives in the reviewed
-repo's own CI runs against it the same way. Nothing here polls a build or
-reports pass/fail back; the existing pipeline you already have does that.
+existing `synchronize`-triggered `pr-review.yml`, and whatever test job lives
+in the reviewed repo's own CI — **provided the push token is not the
+workflow's `GITHUB_TOKEN`**. GitHub does not start workflows for pushes made
+with `GITHUB_TOKEN`, so `pr-apply.yml` pushes with a separate
+`PR_REVIEW_APPLY_TOKEN` secret (a machine-user fine-grained PAT, or a GitHub
+App token). Nothing here polls a build or reports pass/fail back.
 
 Azure DevOps is not wired up for this yet — it has no clean YAML-only trigger
 for a comment reply, unlike GitHub's `pull_request_review_comment` event.
@@ -190,15 +199,75 @@ and `CAN_QUERY` on the review model's serving endpoint. Change
 3. Optionally make `pr-review-agent/ai-code-review` a required status check in
    branch protection so the review itself blocks the merge.
 4. Optionally copy `pipelines/github/pr-apply.yml` too, to enable "Accepting a
-   suggestion" (above). It reuses the same secrets.
+   suggestion" (above). It reuses the same secrets, plus
+   `PR_REVIEW_APPLY_TOKEN` — a fine-grained PAT (Contents and Pull requests,
+   Read & write) or GitHub App token, so the pushed fix triggers CI.
 
 The workflow's own `GITHUB_TOKEN` is the SCM token — there is no PAT to
 manage — but it needs `pull-requests: write` (to comment) and
-`statuses: write` (to publish the gate) — plus `contents: write` if
-`pr-apply.yml` is wired up. Running the agent against a repo from *outside*
+`statuses: write` (to publish the gate). Running the agent against a repo from *outside*
 Actions needs a classic PAT with `repo`, or a fine-grained token with Pull
 requests (Read & write), Contents (Read) and Commit statuses (Read & write) —
 Contents (Read **& write**) if `allow_apply_fixes` is enabled.
+
+### The apply token
+
+`pr-apply.yml` pushes with `PR_REVIEW_APPLY_TOKEN` rather than the job's
+`GITHUB_TOKEN`, because GitHub does not start workflows for pushes made with
+`GITHUB_TOKEN` — the fix would land without CI or a re-review.
+
+**Today: a fine-grained personal access token.**
+
+1. As a machine user (e.g. `yourorg-bot`), not a person — every fix commit
+   and confirmation comment is attributed to the token's owner: profile →
+   **Settings** → **Developer settings** → **Personal access tokens** →
+   **Fine-grained tokens** → **Generate new token**.
+2. Resource owner: the repo's owner. Repository access: *Only select
+   repositories*. Repository permissions: **Contents** and **Pull requests**,
+   both Read and write. Set an expiry and a reminder — an expired token makes
+   every apply fail with a 401. Organisations may need to approve the token.
+3. In the reviewed repo: **Settings** → **Secrets and variables** →
+   **Actions** → **New repository secret** named `PR_REVIEW_APPLY_TOKEN`, or
+   `gh secret set PR_REVIEW_APPLY_TOKEN --repo <owner>/<repo>`.
+
+**Planned: a GitHub App token (not yet applied).** Preferable for an
+organisation: no long-lived token to rotate, no machine-user seat, and
+commits show as `<app-name>[bot]`. Nothing in the app changes — only the
+workflow and its secrets. To switch:
+
+1. Create a GitHub App (**Settings** → **Developer settings** → **GitHub
+   Apps** → **New GitHub App**; webhook off). Repository permissions:
+   **Contents** and **Pull requests**, both Read and write.
+2. Generate a private key, then install the App on the reviewed repo(s).
+3. Add repo (or org) secrets `PR_REVIEW_APP_ID` and
+   `PR_REVIEW_APP_PRIVATE_KEY` (the whole `.pem` contents).
+4. In `pr-apply.yml`, mint a token before the "Apply suggestion" step and use
+   it in place of the PAT secret:
+
+   ```yaml
+       steps:
+         - name: Mint GitHub App token
+           id: app-token
+           uses: actions/create-github-app-token@v2
+           with:
+             app-id: ${{ secrets.PR_REVIEW_APP_ID }}
+             private-key: ${{ secrets.PR_REVIEW_APP_PRIVATE_KEY }}
+
+         - name: Apply suggestion
+           env:
+             # was: ${{ secrets.PR_REVIEW_APPLY_TOKEN }}
+             GH_TOKEN: ${{ steps.app-token.outputs.token }}
+   ```
+
+   The token lasts one hour and is revoked when the job ends, which covers
+   the workflow's 10-minute polling window.
+5. Update the "PR_REVIEW_APPLY_TOKEN is not set" message and the header
+   comment in `pr-apply.yml`, then delete the `PR_REVIEW_APPLY_TOKEN` secret
+   and revoke the PAT.
+
+Either way `apply_trusted_authors` is unaffected: it names who wrote the
+*review* comments (`github-actions[bot]`, via `pr-review.yml`), not who pushes
+the fix.
 
 ## Wiring up Azure DevOps
 

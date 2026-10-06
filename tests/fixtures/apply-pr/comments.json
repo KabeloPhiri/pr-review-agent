@@ -6,6 +6,6 @@
     "file": "example.py",
     "line": 2,
     "body": "🟠 **WARNING** · `python.style.spacing`\n\nMissing spaces around the + operator.\n\n**Suggestion**\n\n    return a + b\n\n<!-- prreview:abc123def456 -->",
-    "author": "ai-reviewer-bot"
+    "author": "github-actions[bot]"
   }
 ]

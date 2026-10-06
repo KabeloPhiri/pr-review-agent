@@ -31,7 +31,7 @@ ENV_PREFIX = "PRREVIEW_"
 
 # Fields that accept a comma-separated string when they arrive from the
 # environment (YAML and JSON sources already give us real lists).
-_LIST_FIELDS = {"analyzers", "standards", "exclude_paths"}
+_LIST_FIELDS = {"analyzers", "standards", "exclude_paths", "apply_trusted_authors"}
 
 
 class EffectiveConfig(BaseModel):
@@ -76,12 +76,18 @@ class EffectiveConfig(BaseModel):
     status_name: str = "ai-code-review"
 
     # --- apply ---
+    # For /apply these are read from the pull request's *target* branch (see
+    # `ReviewPipeline.apply`), so a pull request cannot opt itself in.
     #: Opt-in: the bot pushes code only when a repo explicitly turns this on.
     allow_apply_fixes: bool = False
     #: Plugin selection, same family as `reviewer`/`quality`. "noop" (the
     #: default) never produces a change, so `allow_apply_fixes` alone can't
     #: push anything — both have to be set.
     applier: str = "noop"
+    #: Logins whose comments `/apply` will act on — the identity that posts
+    #: the review. Anyone else can paste a comment in the bot's format, so
+    #: the format alone proves nothing.
+    apply_trusted_authors: list[str] = Field(default_factory=lambda: ["github-actions[bot]"])
 
     def fingerprint(self) -> str:
         """Short stable hash, attached to traces so a review is reproducible."""

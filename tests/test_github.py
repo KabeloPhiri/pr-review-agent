@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 
-from app.core.errors import ScmAuthError, ScmError
+from app.core.errors import ScmAuthError, ScmConflictError, ScmError
 from app.core.models import ChangeType, CommentDraft, GateLevel, PullRequestRef, Verdict
 from app.services.scm.github import GitHubConnector
 
@@ -39,6 +39,8 @@ class FakeApi:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self.inline_comment_status = 201
+        self.head_repo: dict | None = {"full_name": "KabeloPhiri/platform"}
+        self.put_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -52,8 +54,12 @@ class FakeApi:
                     "title": "Add summary",
                     "body": "why",
                     "user": {"login": "KabeloPhiri"},
-                    "head": {"ref": "feature", "sha": "src111"},
-                    "base": {"ref": "main", "sha": "tgt222"},
+                    "head": {"ref": "feature", "sha": "src111", "repo": self.head_repo},
+                    "base": {
+                        "ref": "main",
+                        "sha": "tgt222",
+                        "repo": {"full_name": "KabeloPhiri/platform"},
+                    },
                     "draft": False,
                     "html_url": "https://github.com/KabeloPhiri/platform/pull/42",
                 },
@@ -75,6 +81,8 @@ class FakeApi:
             return httpx.Response(200, json={"sha": "blob123", "content": "ZGVmIGZvbygpOiAuLi4="})
 
         if path.endswith("/contents/jobs/etl.py") and method == "PUT":
+            if self.put_status == 409:
+                return httpx.Response(409, json={"message": "jobs/etl.py does not match blob123"})
             return httpx.Response(200, json={"commit": {"sha": "newsha456"}})
 
         if "/contents/" in path and method == "GET":
@@ -92,6 +100,22 @@ class FakeApi:
                     "path": "jobs/etl.py",
                     "line": 4,
                     "user": {"login": "KabeloPhiri"},
+                    "pull_request_url": "https://api.github.com/repos/KabeloPhiri/platform/pulls/42",
+                },
+            )
+
+        if path.endswith("/pulls/comments/601") and method == "GET":
+            # Same repo, different pull request.
+            return httpx.Response(
+                200,
+                json={
+                    "id": 601,
+                    "node_id": "RC_node601",
+                    "body": "elsewhere",
+                    "path": "jobs/etl.py",
+                    "line": 4,
+                    "user": {"login": "github-actions[bot]"},
+                    "pull_request_url": "https://api.github.com/repos/KabeloPhiri/platform/pulls/7",
                 },
             )
 
@@ -398,6 +422,41 @@ async def test_update_file_fetches_sha_then_puts_new_content(connector, api):
     import base64
 
     assert base64.b64decode(body["content"]).decode() == "new content"
+    await connector.aclose()
+
+
+async def test_update_file_reads_the_sha_at_the_reviewed_commit(connector, api):
+    """The sha must come from the commit the new content was derived from,
+    not the branch tip, or GitHub's conflict check can never fire."""
+    pr = await connector.get_pull_request(_ref())
+    await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+
+    get_request = api.find("/contents/jobs/etl.py", method="GET")
+    assert get_request.url.params["ref"] == "src111"
+    await connector.aclose()
+
+
+async def test_update_file_conflict_is_a_conflict_error(connector, api):
+    api.put_status = 409
+    pr = await connector.get_pull_request(_ref())
+    with pytest.raises(ScmConflictError):
+        await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+    await connector.aclose()
+
+
+async def test_get_comment_from_another_pull_request_is_none(connector):
+    pr = await connector.get_pull_request(_ref())
+    assert await connector.get_comment(pr, "601") is None
+    await connector.aclose()
+
+
+async def test_pull_request_from_a_fork_is_flagged(connector, api):
+    assert (await connector.get_pull_request(_ref())).is_fork is False
+    api.head_repo = {"full_name": "someone/platform"}
+    assert (await connector.get_pull_request(_ref())).is_fork is True
+    # A deleted fork leaves head.repo null.
+    api.head_repo = None
+    assert (await connector.get_pull_request(_ref())).is_fork is True
     await connector.aclose()
 
 

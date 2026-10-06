@@ -73,6 +73,9 @@ class PullRequest(BaseModel):
     target_commit: str = ""
     url: str | None = None
     is_draft: bool = False
+    #: The source branch lives in a different repository (a fork). Pushing to
+    #: it needs access this app's token does not have, so apply refuses it.
+    is_fork: bool = False
 
 
 class ChangeType(str, Enum):
@@ -239,3 +242,6 @@ class ApplyResult(BaseModel):
     reason: str | None = None
     file: str | None = None
     commit_sha: str | None = None
+    #: Post-push follow-ups (confirmation comment, resolving the thread) that
+    #: failed. The commit is already on the branch, so these do not fail it.
+    warnings: list[str] = Field(default_factory=list)

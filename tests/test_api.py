@@ -143,3 +143,29 @@ def test_scm_token_header_reaches_the_connector(client, fixture_dir, monkeypatch
         headers={"X-SCM-Token": "pat-from-pipeline"},
     )
     assert seen["token"] == "pat-from-pipeline"
+
+
+def test_async_apply_can_be_polled_and_not_mistaken_for_a_review(client):
+    from pathlib import Path
+
+    apply_dir = Path(__file__).resolve().parent / "fixtures" / "apply-pr"
+    body = _body(
+        apply_dir,
+        mode="async",
+        comment_id="comment-1",
+        requester="dev@example.com",
+        config={"allow_apply_fixes": True, "applier": "noop"},
+    )
+    response = client.post("/apply", json=body)
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    for _ in range(50):
+        polled = client.get(f"/apply/{job_id}")
+        if polled.json()["status"] == "completed":
+            break
+    assert polled.status_code == 200
+    assert polled.json()["result"]["reason"] == "no_change_generated"
+
+    # The review route used to fail validation (a 500) on an apply job.
+    assert client.get(f"/review/{job_id}").status_code == 404

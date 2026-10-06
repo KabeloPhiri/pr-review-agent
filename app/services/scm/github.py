@@ -32,7 +32,7 @@ from typing import Any
 
 import httpx
 
-from app.core.errors import ScmAuthError, ScmError
+from app.core.errors import ScmAuthError, ScmConflictError, ScmError
 from app.core.models import (
     ChangeType,
     CommentDraft,
@@ -186,6 +186,10 @@ class GitHubConnector(ScmConnector):
                 "GitHub rate limit exceeded",
                 detail=f"Resets at epoch {response.headers.get('x-ratelimit-reset', 'unknown')}.",
             )
+        if response.status_code == 409:
+            raise ScmConflictError(
+                f"GitHub returned 409 for {method} {url}", detail=response.text[:500]
+            )
         if response.status_code in (401, 403):
             raise ScmAuthError(
                 "GitHub rejected the token",
@@ -228,6 +232,9 @@ class GitHubConnector(ScmConnector):
             target_commit=target,
             url=data.get("html_url"),
             is_draft=bool(data.get("draft", False)),
+            # A deleted fork leaves `head.repo` null — still not this repo.
+            is_fork=(head.get("repo") or {}).get("full_name")
+            != (base.get("repo") or {}).get("full_name"),
         )
 
     async def get_diff(self, pr: PullRequest) -> Diff:
@@ -358,6 +365,12 @@ class GitHubConnector(ScmConnector):
             logger.info("Could not fetch comment %s: %s", comment_id, exc.message)
             return None
         data = response.json()
+        # The endpoint is repo-wide, so an id from another pull request in the
+        # same repo resolves too; that comment is not this PR's to apply.
+        pr_url = str(data.get("pull_request_url") or "")
+        if not pr_url.endswith(f"/pulls/{pr.ref.pull_request_id}"):
+            logger.info("Comment %s does not belong to %s", comment_id, pr.ref.slug())
+            return None
         node_id = data.get("node_id") or str(data.get("id", ""))
         return SourceComment(
             thread_id=f"{_REVIEW_PREFIX}{node_id}",
@@ -432,9 +445,10 @@ class GitHubConnector(ScmConnector):
 
         Uses the Contents API (single file, one commit) rather than the Git
         Data API — simplest mapping for "one accepted finding, one commit".
-        The blob `sha` is re-fetched from the branch tip right before the
-        PUT (not reused from the review-time `pr.source_commit`) so a stale
-        sha from an earlier review can't cause a spurious 409.
+        The blob `sha` is the file's sha at `pr.source_commit` — the commit
+        `new_content` was derived from — not at the branch tip. If the branch
+        has since changed this file, GitHub answers 409 (`ScmConflictError`)
+        instead of the PUT silently overwriting those newer changes.
         """
         base = self._base(pr.ref)
         clean_path = path.lstrip("/")
@@ -455,7 +469,7 @@ class GitHubConnector(ScmConnector):
         base = self._base(pr.ref)
         try:
             response = await self._request(
-                "GET", f"{base}/contents/{clean_path}", params={"ref": pr.source_branch}
+                "GET", f"{base}/contents/{clean_path}", params={"ref": pr.source_commit}
             )
         except ScmError as exc:
             logger.info("Could not read sha for %s: %s", clean_path, exc.message)

@@ -36,6 +36,10 @@ status_name: ai-code-review
 
 # Opt-in: a repo turns both of these on to let the PR author's "/apply"
 # reply push the bot's suggestion as a commit. See README "Accepting a
-# suggestion".
+# suggestion". For /apply these are read from the PR's *target* branch, so
+# the opt-in has to be merged before a pull request can use it.
 allow_apply_fixes: false
 applier: noop
+# Only comments written by one of these logins can be applied — the identity
+# pr-review.yml posts as. GITHUB_TOKEN posts as github-actions[bot].
+apply_trusted_authors: ["github-actions[bot]"]

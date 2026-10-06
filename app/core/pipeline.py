@@ -16,7 +16,7 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve
-from app.core.errors import ReviewerError, ScmError
+from app.core.errors import ReviewerError, ScmConflictError, ScmError
 from app.core.models import (
     ApplyResult,
     CommentDraft,
@@ -113,23 +113,41 @@ class ReviewPipeline:
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
-            config = await self.resolve_config(scm, pr, overrides)
+            # Pushing code is the repository's decision, not the pull
+            # request's: read config from the *target* branch, so a PR cannot
+            # opt itself in (or widen apply_trusted_authors) from its own
+            # .prreview/config.yaml.
+            config = await self.resolve_config(
+                scm, pr.model_copy(update={"source_commit": pr.target_commit}), overrides
+            )
             _tag_trace(pr, config)
 
             if not config.allow_apply_fixes:
                 return ApplyResult(ref=ref, applied=False, reason="apply_fixes_disabled")
             if requester != pr.author:
                 return ApplyResult(ref=ref, applied=False, reason="unauthorized_requester")
+            if pr.is_fork:
+                return ApplyResult(ref=ref, applied=False, reason="fork_pull_request_unsupported")
 
             source = await scm.get_comment(pr, comment_id)
             if source is None or source.file is None:
                 return ApplyResult(
                     ref=ref, applied=False, reason="comment_not_found_or_unsupported"
                 )
+            # The rendered format is public, so anyone can paste a lookalike
+            # comment; only the identity that posts reviews is trusted.
+            if source.author not in config.apply_trusted_authors:
+                return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
 
             parsed = parse_finding_comment(source.body)
             if parsed is None:
                 return ApplyResult(ref=ref, applied=False, reason="not_a_bot_suggestion")
+
+            # Keyed by the accepted comment, so a second `/apply` or a
+            # redelivered webhook cannot apply the same fix twice.
+            applied_marker = f"prreview:applied:{comment_id}"
+            if any(c.marker == applied_marker for c in await scm.list_comments(pr)):
+                return ApplyResult(ref=ref, applied=False, reason="already_applied")
 
             finding = Finding(
                 file=source.file,
@@ -155,27 +173,48 @@ class ReviewPipeline:
             if not new_content or new_content == current_text:
                 return ApplyResult(ref=ref, applied=False, reason="no_change_generated")
 
-            commit_sha = await scm.update_file(
-                pr,
-                source.file,
-                new_content,
-                message=f"Apply AI review suggestion ({finding.rule_id}) on {source.file}",
-            )
+            try:
+                commit_sha = await scm.update_file(
+                    pr,
+                    source.file,
+                    new_content,
+                    message=f"Apply AI review suggestion ({finding.rule_id}) on {source.file}",
+                )
+            except ScmConflictError:
+                # The branch changed this file after `pr` was read; pushing a
+                # patch of the older content would revert those changes.
+                return ApplyResult(ref=ref, applied=False, reason="file_changed_since_review")
 
-            await scm.post_comment(
-                pr,
-                CommentDraft(
-                    body=(
-                        f"✅ Applied in commit `{commit_sha[:12]}`. Pushing this commit "
-                        "re-triggers review and this repository's own CI automatically."
+            # The commit is on the branch now. Anything below failing is a
+            # warning, not a failure — reporting a landed fix as failed only
+            # invites a retry.
+            warnings: list[str] = []
+            try:
+                await scm.post_comment(
+                    pr,
+                    CommentDraft(
+                        body=(
+                            f"✅ Applied in commit `{commit_sha[:12]}`.\n\n"
+                            f"<!-- {applied_marker} -->"
+                        ),
+                        marker=applied_marker,
                     ),
-                    marker=f"prreview:applied:{commit_sha[:12]}",
-                ),
-            )
-            await scm.close_comment(pr, source.thread_id)
+                )
+            except ScmError as exc:
+                logger.warning("Applied %s but could not confirm it", commit_sha, exc_info=True)
+                warnings.append(f"could not post the confirmation comment ({exc.message})")
+            try:
+                await scm.close_comment(pr, source.thread_id)
+            except ScmError as exc:
+                logger.warning("Applied %s but could not resolve the thread", commit_sha)
+                warnings.append(f"could not resolve the suggestion thread ({exc.message})")
 
             return ApplyResult(
-                ref=ref, applied=True, file=source.file, commit_sha=commit_sha
+                ref=ref,
+                applied=True,
+                file=source.file,
+                commit_sha=commit_sha,
+                warnings=warnings,
             )
         finally:
             await scm.aclose()

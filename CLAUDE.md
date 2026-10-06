@@ -155,9 +155,20 @@ guards the round trip.
 
 This follows the same asymmetric failure policy as `run()`, but inverted in
 spirit: every "this wasn't meant for us" case (`allow_apply_fixes` off, wrong
-requester, a comment that isn't one of the bot's, nothing to change) is a
-*soft* `ApplyResult(applied=False, reason=...)`, not an exception — only a
-real SCM or model failure raises. `ScmConnector.update_file`/`get_comment`
+requester, a fork PR, a comment not written by one of `apply_trusted_authors`,
+already applied, the file changed on the branch since it was read, nothing to
+change) is a *soft* `ApplyResult(applied=False, reason=...)`, not an
+exception — only a real SCM or model failure raises. Once the commit is
+pushed, a failing confirmation comment or thread-resolve is a warning on
+`ApplyResult`, never a failure.
+
+Apply's config is the one exception to the four layers: `apply()` resolves
+`.prreview/config.yaml` from the PR's **target** commit, so a pull request
+cannot opt itself in. `update_file` sends the blob sha at `pr.source_commit`
+(what the patch was derived from) so GitHub 409s — `ScmConflictError` — if the
+author pushed to that file meanwhile. Pushes made with Actions' `GITHUB_TOKEN`
+do not trigger workflows, which is why `pr-apply.yml` uses its own
+`PR_REVIEW_APPLY_TOKEN`. Apply jobs are polled at `GET /apply/{job_id}`. `ScmConnector.update_file`/`get_comment`
 default to unsupported (raise / return `None`); only `github.py` and
 `fake.py` implement them today. Testing the pushed commit is deliberately not
 this app's job — it relies on the push re-triggering whatever CI already
