@@ -132,3 +132,34 @@ bodies are parsed with `parse_qsl` rather than adding `python-multipart`.
   10 findings, nothing posted.
 - Audit log recorded both changes with the admin's email; the test setting
   was then removed.
+
+## Update 2026-10-06 — PR 3 of 3, Quality (`feature/admin-console-quality`)
+
+- `/fp [reason]` → `pr-apply.yml` → `POST /feedback` →
+  `ReviewPipeline.feedback()`: a `pr_feedback` trace tagged with rule,
+  severity, file, model and reason; a reply in the thread; the thread
+  resolved. PR author or GitHub OWNER/MEMBER/COLLABORATOR only; others get
+  no reply; a second flag on the same comment is `already_recorded`.
+- `Finding.model` (set by `LlmReviewer`) is rendered as a second hidden
+  marker, `<!-- prreview:model:<endpoint> -->`, after the finding's marker
+  so first-marker lookups are unchanged; `parse_finding_comment` returns it.
+- Reviews tag `prreview.rules` (findings per rule) and suspected duplicates
+  (`Publisher.duplicates`: new comment on a line with an open comment under
+  a different rule id); applies tag the accepted rule(s).
+- Console: False positives page — rates (flags ÷ posted) by rule, rule
+  family (linked to the standard), model and repository; `/apply`
+  acceptances; recent flags with reasons; suspected duplicates.
+
+**Verification:** `pytest -q` → 279 passed (257 before); ruff clean.
+Deployed to dev. Live on throwaway PR #18 (targeting the part 3 branch with
+a test-only review trigger): both bot comments carried the model marker;
+`/fp` with a reason got the bot's reply and the thread was resolved; the
+console then showed 2 posted, 1 flagged, 50% overall,
+`python.missing-type-hint` 100%, and the flag with reason, file, model and
+who. PR #18 closed and its branch deleted.
+
+**Limitations:** flags count only comments posted since this deploy (older
+comments carry no model and older reviews no per-rule counts, so those show
+"unknown"/are not in the denominator). Rule families are the first segment
+of the model-invented rule id, which usually but not always names a
+standard.
