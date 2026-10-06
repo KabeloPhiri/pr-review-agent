@@ -21,8 +21,8 @@ class FakeClient:
         for param, message in self.rejects.items():
             if param in kwargs:
                 raise RuntimeError(message)
-        message = SimpleNamespace(content='{"findings": []}')
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        response_message = SimpleNamespace(content='{"findings": []}')
+        return SimpleNamespace(choices=[SimpleNamespace(message=response_message)])
 
 
 def _complete(client):
