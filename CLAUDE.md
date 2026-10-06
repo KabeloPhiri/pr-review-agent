@@ -62,15 +62,34 @@ Two facts explain most of the design:
    `<!-- prreview:<hash> -->` marker derived from file + line + rule, so
    re-runs diff against what is already posted. There is no database.
 
-### Configuration is four layers, and it is the whole control surface
+### Configuration is layered, and it is the whole control surface
 
 `app/core/config.py::resolve()` merges, lowest precedence first:
 `app/defaults/config.yaml` → `PRREVIEW_<FIELD>` env vars (set in
 `databricks.yml`) → `.prreview/config.yaml` read from the PR's **source
-branch** → the `config` object in the request body. Everything the reviewer
-does is driven by the resulting `EffectiveConfig`, so `POST /config/effective`
-explains a misbehaving repo without reading server logs, and tests override
-behaviour by passing `overrides=` to the pipeline rather than by patching.
+branch** → the `config` object in the request body → the **admin console**
+(global, then that repository's own) → `pinned` (internal: the console's
+model test). Everything the reviewer does is driven by the resulting
+`EffectiveConfig`, so `POST /config/effective` explains a misbehaving repo
+without reading server logs — it returns `sources`, the layer that set each
+key. Tests override behaviour by passing `overrides=` to the pipeline rather
+than by patching; console settings default to off (`NullStore`), so tests
+see none unless they `set_settings_store(LocalDirStore(tmp_path))`.
+
+### Admin console (`/console`)
+
+`app/console/` is a feature package; the review path only knows
+`app/core/settings_store.py` (`SettingsStore`, `RepoKey`). Settings live in a
+UC volume (`PRREVIEW_SETTINGS_STORE=volume`, `PRREVIEW_SETTINGS_VOLUME`),
+cached 30s, every write recorded under `history/`. A store outage degrades to
+the last values read, then defaults, plus a warning on `ReviewResult`; an
+unknown console key is dropped with a log line, never a 400. Metrics come
+from the app's own MLflow traces — `llm_client.complete()` records token
+usage per call and `_tag_trace`/`_tag_outcome` add `pr.repo` and
+`prreview.*` — so there is no metrics store. Access is the
+`PRREVIEW_CONSOLE_ADMINS`/`_VIEWERS` allowlists against `X-Forwarded-Email`;
+edits are admins only and refused cross-site. The UI has no scripts and no
+icons or emoji — `tests/test_console*.py` scan every page for them.
 
 ### Request modes and job state
 

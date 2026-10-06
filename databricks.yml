@@ -6,13 +6,13 @@ resources:
   # In the dev target, bundle development mode prefixes the schema name.
   schemas:
     pr_review:
-      catalog_name: main
+      catalog_name: dia_ai_agent_solution
       name: pr_review
       comment: "PR review agent: admin console settings"
 
   volumes:
     console:
-      catalog_name: main
+      catalog_name: dia_ai_agent_solution
       schema_name: ${resources.schemas.pr_review.name}
       name: console
       volume_type: MANAGED
@@ -55,7 +55,7 @@ resources:
           - name: PRREVIEW_SETTINGS_STORE
             value: "volume"
           - name: PRREVIEW_SETTINGS_VOLUME
-            value: "/Volumes/main/${resources.schemas.pr_review.name}/console"
+            value: "/Volumes/dia_ai_agent_solution/${resources.schemas.pr_review.name}/console"
           # Models the console may switch to. Each needs a CAN_QUERY resource
           # below; the app cannot be granted access at runtime.
           - name: PRREVIEW_ALLOWED_MODELS
@@ -103,7 +103,7 @@ resources:
         - name: 'console-settings'
           uc_securable:
             securable_type: 'VOLUME'
-            securable_full_name: 'main.${resources.schemas.pr_review.name}.console'
+            securable_full_name: 'dia_ai_agent_solution.${resources.schemas.pr_review.name}.console'
             permission: 'WRITE_VOLUME'
       # Who may call the app. Declared here (not set by hand in the UI) so the
       # grants survive the app being deleted and recreated. This list replaces
