@@ -11,4 +11,4 @@ build/
 .ruff_cache/
 logs/
 mlruns/
-mlflow.db
+.databrickscfg
