@@ -74,14 +74,14 @@ n/a — no tables read or written.
 - Secret scan: `tools/Find-Secrets.ps1` does not exist in this repo; the diff
   was grepped for token/key patterns instead — no findings.
 - `bash -n` on the extracted `pr-apply.yml` run script → OK; YAML parses.
-- `databricks bundle validate -t dev` → **not completed**: CLI auth failed
-  (`OS keyring unreachable`), identically on the unmodified tree.
-  `databricks.yml` was not changed.
+- `databricks bundle validate -t dev` → `Validation OK!` (run after the
+  commit, with `DATABRICKS_AUTH_STORAGE=plaintext` — the container has no OS
+  keyring, so the default secure token storage fails).
 
 ## Deployment
 
-Not deployed. Commit `2ea5651` is local on `feature/apply-suggested-fix`,
-not yet pushed.
+Not deployed. Commits `2ea5651` (fix) and `206e394` (this note) are local on
+`feature/apply-suggested-fix`, not yet pushed.
 
 ## Follow-ups
 
@@ -94,5 +94,6 @@ not yet pushed.
   applied fix cannot merge.
 - Planned: switch to a GitHub App token (`actions/create-github-app-token`);
   steps in the README.
-- Re-run `databricks bundle validate -t dev` after
-  `DATABRICKS_AUTH_STORAGE=plaintext databricks auth login`.
+- The dev container needs `DATABRICKS_AUTH_STORAGE=plaintext` for every
+  Databricks CLI call (no D-Bus/keyring); consider setting it in
+  `.devcontainer/devcontainer.json` `containerEnv`.
