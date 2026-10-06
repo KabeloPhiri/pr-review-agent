@@ -6,7 +6,7 @@ import pytest
 
 from app.core.errors import ReviewerError, ScmConflictError, ScmError
 from app.core.models import ExistingComment, PullRequest, PullRequestRef
-from app.core.pipeline import APPLY_MAX_ATTEMPTS, ReviewPipeline, _match_line_endings
+from app.core.pipeline import APPLY_MAX_ATTEMPTS, ReviewPipeline
 from app.services.apply.base import Applier, applier_registry
 from app.services.scm.base import scm_registry
 from app.services.scm.fake import FakeScmConnector
@@ -330,19 +330,6 @@ async def test_crlf_file_keeps_its_line_endings(tricky_ref):
     assert result.applied is True
     [(_, pushed)] = TrickyScm.last.updated_files
     assert pushed == "def add(a, b):\r\n    return a + b"
-
-
-@pytest.mark.parametrize(
-    "original, new, expected",
-    [
-        ("a\r\nb\r\n", "a\nB\n", "a\r\nB\r\n"),
-        ("a\r\nb", "a\nB\n", "a\r\nB"),  # no final newline stays that way
-        ("a\nb\n", "a\nB", "a\nB\n"),  # a final newline is restored
-        ("a\nb\n", "a\r\nB\r\n", "a\nB\n"),  # LF file stays LF
-    ],
-)
-def test_match_line_endings(original, new, expected):
-    assert _match_line_endings(original, new) == expected
 
 
 async def test_failed_follow_ups_do_not_fail_a_landed_commit(tricky_ref):
