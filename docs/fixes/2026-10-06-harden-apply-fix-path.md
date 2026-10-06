@@ -124,3 +124,24 @@ Manual step still required: add the `PR_REVIEW_APPLY_TOKEN` Actions secret.
   `reason=no_change_generated`, and `GET /review/{that job}` → 404 (was 500).
 - Not yet exercised against a real GitHub PR — needs `PR_REVIEW_APPLY_TOKEN`
   and the opt-in merged to `master`.
+
+## Update 2026-10-06 — app recreated; PR moved to pr-review-agent
+
+- PR moved from `pr-review-agent_v2#1` (closed; repo had no Actions secrets)
+  to `KabeloPhiri/pr-review-agent#9`, branch `feature/apply-fix-hardening`.
+- CI login fixed: a dedicated caller service principal
+  (`pr-review-github-ci`, `eaf382c6…`) with CAN_USE on the app; the repo's
+  `DATABRICKS_CLIENT_ID`/`_SECRET` now belong to it.
+- The app's own service principal (`93b6487e…`) lost its OAuth credentials
+  (`invalid_client` on model calls and on the platform's source download), so
+  a redeploy failed and left the app UNAVAILABLE. Recovered by deleting the
+  app (done by the user) and recreating it with `bundle deploy` + `bundle run`.
+  New app service principal: `2aa6a9ca…`; same URL.
+- `databricks.yml` now declares app permissions (owner CAN_MANAGE, caller SP
+  CAN_USE) so a recreate restores them — commit `dac6409`.
+- Verified: model-backed review of the fake fixture on the new app → 200,
+  2 files, 10 findings (note: `tests/fixtures/sample-pr` pins
+  `model_endpoint: databricks-gpt-5-2`, which does not exist in this
+  workspace — override it when smoke-testing). PR #9's review ran end to end:
+  status `failure` (10 error, 80 warning, 61 info), 30 inline comments. The
+  error findings checked were false positives or in `jobs/sales.py`.
