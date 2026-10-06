@@ -169,3 +169,27 @@ def test_async_apply_can_be_polled_and_not_mistaken_for_a_review(client):
 
     # The review route used to fail validation (a 500) on an apply job.
     assert client.get(f"/review/{job_id}").status_code == 404
+
+def test_apply_all_can_be_polled_on_the_apply_route(client):
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "apply-all-pr"
+    body = _body(
+        fixture,
+        mode="async",
+        requester="dev@example.com",
+        config={"allow_apply_fixes": True, "applier": "noop"},
+    )
+    response = client.post("/apply/all", json=body)
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    for _ in range(50):
+        polled = client.get(f"/apply/{job_id}")
+        if polled.json()["status"] == "completed":
+            break
+    assert polled.status_code == 200
+    result = polled.json()["result"]
+    # noop changes nothing, so every suggestion is skipped, none applied.
+    assert result["applied"] is False
+    assert "applied_comment_ids" in result

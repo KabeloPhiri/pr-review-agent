@@ -330,7 +330,8 @@ class GitHubConnector(ScmConnector):
                 if not isinstance(batch, list):
                     break
                 for entry in batch:
-                    match = _MARKER_RE.search(entry.get("body") or "")
+                    body = entry.get("body") or ""
+                    match = _MARKER_RE.search(body)
                     node_id = entry.get("node_id") or str(entry.get("id", ""))
                     comments.append(
                         ExistingComment(
@@ -344,6 +345,9 @@ class GitHubConnector(ScmConnector):
                             is_closed=bool(inline and entry.get("line") is None),
                             file=entry.get("path") if inline else None,
                             line=entry.get("line") if inline else None,
+                            body=body,
+                            author=(entry.get("user") or {}).get("login", ""),
+                            comment_id=str(entry["id"]) if inline and "id" in entry else None,
                         )
                     )
                 if len(batch) < COMMENT_PAGE_SIZE:
