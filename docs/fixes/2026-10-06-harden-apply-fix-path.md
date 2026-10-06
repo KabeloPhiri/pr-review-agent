@@ -4,8 +4,8 @@ type: fix
 agent: claude-code
 date: 2026-10-06
 branch: feature/apply-suggested-fix
-status: implemented
-targets: []
+status: deployed-dev
+targets: [dev]
 relatedTables: []
 ---
 
@@ -111,3 +111,16 @@ Enabled `/apply` on this repository itself:
   (`github-actions[bot]`), matching the default `apply_trusted_authors`.
 
 Manual step still required: add the `PR_REVIEW_APPLY_TOKEN` Actions secret.
+
+## Update 2026-10-06 — deployed to dev
+
+- `databricks bundle deploy -t dev` → 70 files uploaded, 1 deleted; app
+  resource unchanged. `databricks bundle run pr_review_agent -t dev` → app
+  started on the new source (both with `DATABRICKS_AUTH_STORAGE=plaintext`).
+- Smoke test against the running app (fake SCM fixture only, no GitHub):
+  `GET /apply/<unknown>` and `GET /review/<unknown>` → 404 with the new
+  message; `POST /config/effective` shows `apply_trusted_authors`; an async
+  `POST /apply` completed via `GET /apply/{job_id}` with
+  `reason=no_change_generated`, and `GET /review/{that job}` → 404 (was 500).
+- Not yet exercised against a real GitHub PR — needs `PR_REVIEW_APPLY_TOKEN`
+  and the opt-in merged to `master`.
