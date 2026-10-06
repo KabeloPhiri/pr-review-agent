@@ -123,14 +123,19 @@ class FakeScmConnector(ScmConnector):
         # fixture entry are ignored here and only read by `get_comment`.
         # A fixture comment's `thread_id` doubles as its id for `get_comment`.
         existing = [
-            ExistingComment(**{"comment_id": item.get("thread_id"), **item})
+            ExistingComment(**{"comment_id": item["thread_id"], **item})
             for item in self._fixture_comments()
         ]
         # Comments posted in this process count as existing, so a second
         # publish inside one run is a no-op just like a real re-run.
         existing.extend(
             ExistingComment(
-                thread_id=f"local-{i}", marker=c.marker, file=c.file, line=c.line, body=c.body
+                thread_id=f"local-{i}",
+                comment_id=f"local-{i}",
+                marker=c.marker,
+                file=c.file,
+                line=c.line,
+                body=c.body,
             )
             for i, c in enumerate(self.posted)
         )
