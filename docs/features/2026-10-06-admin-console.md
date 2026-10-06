@@ -4,8 +4,8 @@ type: feature
 agent: claude-code
 date: 2026-10-06
 branch: feature/admin-console
-status: implemented
-targets: []
+status: deployed-dev
+targets: [dev]
 relatedTables: []
 ---
 
@@ -68,7 +68,17 @@ n/a (reads the app's own MLflow traces).
 
 ## Deployment
 
-Not yet deployed at the time of writing; see updates below.
+Deployed to dev (`bundle deploy` + `bundle run`). Live check as the admin
+(OAuth token, so Apps sends the real `X-Forwarded-Email`): all six pages
+200 with role Admin and no trace-read errors; a fixture review recorded
+6,056 tokens on `databricks-claude-sonnet-5-5`.
+
+Found live and fixed (`97b71e9`): traces from before outcome tagging were
+counted as refused applies (0 of 14 applied). They now read "Outcome not
+recorded" and are excluded from the pass rate, and their repository is
+derived from `pr.slug`, so `github/KabeloPhiri__pr-review-agent` appears on
+the Repositories page. Databricks Apps rejects an empty env value, so
+`PRREVIEW_CONSOLE_VIEWERS` is omitted until there are viewers.
 
 ## Follow-ups
 
