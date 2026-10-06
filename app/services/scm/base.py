@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from app.core.errors import ScmError
 from app.core.models import (
     CommentDraft,
     Diff,
     ExistingComment,
     PullRequest,
     PullRequestRef,
+    SourceComment,
     Verdict,
 )
 from app.core.registry import Registry
@@ -52,6 +54,15 @@ class ScmConnector(ABC):
     async def list_comments(self, pr: PullRequest) -> list[ExistingComment]:
         """Existing comment threads, so re-runs stay idempotent."""
 
+    async def get_comment(self, pr: PullRequest, comment_id: str) -> SourceComment | None:
+        """Fetch one existing comment, body included, by provider-native id.
+
+        `None` means "unsupported by this connector" or "not found" — both
+        are soft outcomes for a caller like `ReviewPipeline.apply`. Optional:
+        connectors that never need to re-read a comment's body may no-op.
+        """
+        return None
+
     # -- writing ----------------------------------------------------------
 
     @abstractmethod
@@ -61,6 +72,17 @@ class ScmConnector(ABC):
     async def close_comment(self, pr: PullRequest, thread_id: str) -> None:
         """Mark a thread resolved. Optional: connectors may no-op."""
         return None
+
+    async def update_file(
+        self, pr: PullRequest, path: str, new_content: str, message: str
+    ) -> str:
+        """Push a commit replacing one file's content. Returns the new commit id.
+
+        Optional: a connector that cannot push code raises rather than
+        silently no-opping, since the caller (`ReviewPipeline.apply`) needs
+        to know the push did not happen.
+        """
+        raise ScmError(f"{self.name} does not support pushing commits")
 
     async def set_status(
         self,

@@ -1,0 +1,100 @@
+# AI PR review — "accept a suggestion" GitHub Actions workflow.
+#
+# Copy this to `.github/workflows/pr-apply.yml` alongside `pr-review.yml` in
+# the repository you want reviewed, so the PR author can turn one of the
+# bot's inline suggestions into a pushed commit by replying `/apply` on it.
+#
+# This is a materially different trust boundary from `pr-review.yml`: that
+# workflow only ever comments and sets a status; this one pushes code on the
+# bot's behalf. It is its own workflow file (not a job bolted onto
+# `pr-review.yml`) so the `contents: write` permission stays separately
+# auditable, and the app itself still refuses to act unless the repo has
+# opted in with `allow_apply_fixes: true` (and `applier: llm`) in
+# `.prreview/config.yaml`, and the replier is the PR's own author.
+#
+# Prerequisites
+# -------------
+# Same secrets as `pr-review.yml`: DATABRICKS_HOST, DATABRICKS_CLIENT_ID,
+# DATABRICKS_CLIENT_SECRET, PR_REVIEW_APP_URL. The job's own `GITHUB_TOKEN`
+# needs `contents: write` in addition to `pull-requests: write` — a
+# fine-grained token used outside Actions needs Contents (Read & write).
+#
+# Once a fix is pushed, the existing `synchronize`-triggered `pr-review.yml`
+# (and whatever test job lives in this repo's own CI) re-runs automatically.
+# Nothing here polls or re-triggers anything on purpose.
+
+name: AI code review - apply suggestion
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    # Only a reply (has `in_reply_to_id`) whose body opens with `/apply` is a
+    # suggestion-acceptance; every other inline comment is ignored here.
+    if: |
+      github.event.comment.in_reply_to_id != null &&
+      startsWith(github.event.comment.body, '/apply')
+    steps:
+      - name: Apply suggestion
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          PR_REVIEW_APP_URL: ${{ secrets.PR_REVIEW_APP_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMENT_ID: ${{ github.event.comment.in_reply_to_id }}
+          REQUESTER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+
+          APP_URL="${PR_REVIEW_APP_URL%/}"
+
+          # Databricks Apps only accept OAuth tokens, so mint one from the
+          # service principal's client credentials — same as pr-review.yml.
+          TOKEN=$(curl -sS --fail-with-body \
+            -u "$DATABRICKS_CLIENT_ID:$DATABRICKS_CLIENT_SECRET" \
+            -d 'grant_type=client_credentials&scope=all-apis' \
+            "${DATABRICKS_HOST%/}/oidc/v1/token" | jq -r .access_token)
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Could not mint a Databricks OAuth token."
+            exit 1
+          fi
+
+          # The repo's own GITHUB_TOKEN travels in X-SCM-Token and is never
+          # stored by the app, same as every review request.
+          HTTP_CODE=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$APP_URL/apply" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "X-SCM-Token: $GH_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+                  --arg repo "$REPO" --arg pr "$PR_NUMBER" \
+                  --arg cid "$COMMENT_ID" --arg req "$REQUESTER" \
+                  '{scm: "github", repository: $repo, pull_request_id: $pr,
+                    comment_id: $cid, requester: $req, mode: "sync"}')")
+
+          cat response.json | jq . || cat response.json
+
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::The apply endpoint returned $HTTP_CODE."
+            exit 1
+          fi
+
+          APPLIED=$(jq -r '.result.applied // false' response.json)
+          REASON=$(jq -r '.result.reason // ""' response.json)
+          if [ "$APPLIED" = "true" ]; then
+            SHA=$(jq -r '.result.commit_sha' response.json)
+            echo "### AI code review: applied suggestion in \`${SHA:0:12}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### AI code review: did not apply ($REASON)" >> "$GITHUB_STEP_SUMMARY"
+          fi

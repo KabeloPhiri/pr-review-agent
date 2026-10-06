@@ -30,6 +30,7 @@ imported, so features can be added or removed without touching the core.
 | SCM | `ScmConnector` | `github`, `azure_devops`, `fake` | new module in `app/services/scm/` + a line in `_MODULES` |
 | Quality tools | `QualityConnector` | `noop` (SonarQube adapter is next) | new module in `app/services/quality/` |
 | Reviewer | `Reviewer` | `llm` (one structured-output call per chunk) | new module in `app/services/review/` |
+| Applier | `Applier` | `noop` (default, inert), `llm` | new module in `app/services/apply/` |
 | Analyzers | standards fragments | `python`, `pyspark`, `sql`, `naming` | drop markdown in `app/defaults/standards/` — no code change |
 
 ## Configuration
@@ -77,6 +78,7 @@ review.
 |---|---|
 | `POST /review` | Run a review. `mode`: `auto` (default), `sync`, `async` |
 | `GET /review/{job_id}` | Poll a background review |
+| `POST /apply` | Accept one bot suggestion and push it as a commit (opt-in; see below) |
 | `POST /config/effective` | Show the configuration a review would use |
 | `POST /invocations` | MLflow agent entry point; always synchronous |
 | `GET /health` | Health check (from the MLflow agent server) |
@@ -105,6 +107,38 @@ still running. Comments and the PR status land regardless — that path does not
 depend on the job store. If you need polling to be reliable for gating, run the
 app single-replica, or gate on the Azure DevOps status check instead, or
 implement a shared `JobStore` (see `app/core/jobs.py`).
+
+## Accepting a suggestion
+
+GitHub only, and opt-in. The PR author replies `/apply` on one of the bot's
+inline suggestions; `pipelines/github/pr-apply.yml` (copy it alongside
+`pr-review.yml`) calls `POST /apply`, and the bot pushes the suggested fix as
+a commit on the PR's own branch.
+
+Two flags have to be set together in `.prreview/config.yaml` — `allow_apply_fixes`
+alone changes nothing, since the shipped `applier: noop` never produces a
+change:
+
+```yaml
+# .prreview/config.yaml
+allow_apply_fixes: true
+applier: llm
+```
+
+Only the **PR's own author** may trigger an apply — a reply from anyone else
+is a quiet no-op, not an error. The bot reconstructs the finding from its own
+comment text (severity, rule, message, suggestion — the same trick that keeps
+`/review` idempotent, see "Re-runs are safe" below), regenerates the file with
+one model call, and pushes a single-file commit via the Contents API.
+
+**Testing the fix is not this app's job.** Pushing the commit re-triggers the
+existing `synchronize`-triggered `pr-review.yml` automatically, exactly as any
+other push would — and whatever test job already lives in the reviewed
+repo's own CI runs against it the same way. Nothing here polls a build or
+reports pass/fail back; the existing pipeline you already have does that.
+
+Azure DevOps is not wired up for this yet — it has no clean YAML-only trigger
+for a comment reply, unlike GitHub's `pull_request_review_comment` event.
 
 ## Local development
 
@@ -155,13 +189,16 @@ and `CAN_QUERY` on the review model's serving endpoint. Change
    `PR_REVIEW_APP_URL`).
 3. Optionally make `pr-review-agent/ai-code-review` a required status check in
    branch protection so the review itself blocks the merge.
+4. Optionally copy `pipelines/github/pr-apply.yml` too, to enable "Accepting a
+   suggestion" (above). It reuses the same secrets.
 
 The workflow's own `GITHUB_TOKEN` is the SCM token — there is no PAT to
 manage — but it needs `pull-requests: write` (to comment) and
-`statuses: write` (to publish the gate). Running the agent against a repo from
-*outside* Actions needs a classic PAT with `repo`, or a fine-grained token with
-Pull requests (Read & write), Contents (Read) and Commit statuses (Read &
-write).
+`statuses: write` (to publish the gate) — plus `contents: write` if
+`pr-apply.yml` is wired up. Running the agent against a repo from *outside*
+Actions needs a classic PAT with `repo`, or a fine-grained token with Pull
+requests (Read & write), Contents (Read) and Commit statuses (Read & write) —
+Contents (Read **& write**) if `allow_apply_fixes` is enabled.
 
 ## Wiring up Azure DevOps
 

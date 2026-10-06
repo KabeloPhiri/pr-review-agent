@@ -22,7 +22,12 @@ from typing import Awaitable, Callable, Protocol
 
 from pydantic import BaseModel, Field
 
-from app.core.models import ReviewResult
+from app.core.models import ApplyResult, ReviewResult
+
+#: A job runs either a full review or a single apply-fix operation; both
+#: share this store/runner unchanged since neither cares about the payload
+#: shape, only that it's a zero-arg coroutine.
+JobResult = ReviewResult | ApplyResult
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +49,7 @@ class Job(BaseModel):
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
     pr: str = ""
-    result: ReviewResult | None = None
+    result: JobResult | None = None
     error: str | None = None
 
     def touch(self, status: JobStatus) -> None:
@@ -103,14 +108,14 @@ class JobRunner:
         self.store = store
         self._tasks: set[asyncio.Task] = set()
 
-    async def submit(self, pr: str, work: Callable[[], Awaitable[ReviewResult]]) -> Job:
+    async def submit(self, pr: str, work: Callable[[], Awaitable[JobResult]]) -> Job:
         job = await self.store.create(pr)
         task = asyncio.create_task(self._run(job, work))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return job
 
-    async def _run(self, job: Job, work: Callable[[], Awaitable[ReviewResult]]) -> None:
+    async def _run(self, job: Job, work: Callable[[], Awaitable[JobResult]]) -> None:
         job.touch(JobStatus.RUNNING)
         await self.store.save(job)
         try:

@@ -71,10 +71,29 @@ class FakeApi:
                 ],
             )
 
+        if path.endswith("/contents/jobs/etl.py") and method == "GET":
+            return httpx.Response(200, json={"sha": "blob123", "content": "ZGVmIGZvbygpOiAuLi4="})
+
+        if path.endswith("/contents/jobs/etl.py") and method == "PUT":
+            return httpx.Response(200, json={"commit": {"sha": "newsha456"}})
+
         if "/contents/" in path and method == "GET":
             if path.endswith(".prreview/config.yaml"):
                 return httpx.Response(200, text="severity_gate: warning\n")
             return httpx.Response(404, json={"message": "Not Found"})
+
+        if path.endswith("/pulls/comments/501") and method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "id": 501,
+                    "node_id": "RC_node501",
+                    "body": "**WARNING** · `rule`\n\nfix it\n\n<!-- prreview:abc -->",
+                    "path": "jobs/etl.py",
+                    "line": 4,
+                    "user": {"login": "KabeloPhiri"},
+                },
+            )
 
         if path.endswith("/pulls/42/comments") and method == "GET":
             if int(request.url.params.get("page", 1)) > 1:
@@ -342,4 +361,48 @@ async def test_spent_rate_limit_is_not_reported_as_an_auth_problem():
         await connector.get_pull_request(_ref())
     assert not isinstance(exc.value, ScmAuthError)
     assert "rate limit" in exc.value.message.lower()
+    await connector.aclose()
+
+
+# --- accept-and-apply --------------------------------------------------
+
+
+async def test_get_comment_fetches_by_the_plain_rest_id(connector):
+    pr = await connector.get_pull_request(_ref())
+    comment = await connector.get_comment(pr, "501")
+
+    assert comment is not None
+    assert comment.thread_id == "review:RC_node501"
+    assert comment.file == "jobs/etl.py"
+    assert comment.line == 4
+    assert comment.author == "KabeloPhiri"
+    await connector.aclose()
+
+
+async def test_get_comment_is_none_when_not_found(connector):
+    pr = await connector.get_pull_request(_ref())
+    assert await connector.get_comment(pr, "does-not-exist") is None
+    await connector.aclose()
+
+
+async def test_update_file_fetches_sha_then_puts_new_content(connector, api):
+    pr = await connector.get_pull_request(_ref())
+    sha = await connector.update_file(pr, "jobs/etl.py", "new content", "apply suggestion")
+
+    assert sha == "newsha456"
+    put_request = api.find("/contents/jobs/etl.py", method="PUT")
+    body = json.loads(put_request.content)
+    assert body["sha"] == "blob123"
+    assert body["branch"] == "feature"
+    assert body["message"] == "apply suggestion"
+    import base64
+
+    assert base64.b64decode(body["content"]).decode() == "new content"
+    await connector.aclose()
+
+
+async def test_update_file_without_a_readable_sha_is_an_scm_error(connector):
+    pr = await connector.get_pull_request(_ref())
+    with pytest.raises(ScmError):
+        await connector.update_file(pr, "does/not/exist.py", "new content", "apply suggestion")
     await connector.aclose()

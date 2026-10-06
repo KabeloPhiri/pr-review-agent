@@ -1,9 +1,10 @@
 """HTTP surface.
 
-Three endpoints, all mounted on the MLflow `AgentServer` FastAPI app:
+Mounted on the MLflow `AgentServer` FastAPI app:
 
     POST /review            run a review (sync, async, or auto)
     GET  /review/{job_id}   poll a background review
+    POST /apply             accept one bot suggestion and push it as a commit
     POST /config/effective  show the configuration a review would use
 """
 
@@ -16,6 +17,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import token_from_request
 from app.api.schemas import (
+    ApplyRequest,
+    ApplyResponse,
     ConfigRequest,
     ConfigResponse,
     ReviewMode,
@@ -25,6 +28,7 @@ from app.api.schemas import (
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
 from app.core.pipeline import ReviewPipeline
+from app.services.apply import known_appliers
 from app.services.policy import standards
 from app.services.quality import known_quality_connectors
 from app.services.review import known_reviewers
@@ -90,6 +94,39 @@ def build_router(runner: JobRunner) -> APIRouter:
             return JSONResponse(status_code=500, content=ReviewResponse.from_job(job).model_dump())
         return ReviewResponse.from_job(job)
 
+    @router.post("/apply", response_model=ApplyResponse)
+    async def apply(body: ApplyRequest, request: Request):
+        ref = body.to_ref()
+        token = token_from_request(request, body.scm_token)
+
+        async def work():
+            return await pipeline.apply(
+                ref,
+                scm_token=token,
+                comment_id=body.comment_id,
+                requester=body.requester,
+                overrides=body.config,
+            )
+
+        if body.mode is ReviewMode.SYNC:
+            logger.info("Applying a suggestion on %s synchronously", ref.slug())
+            return ApplyResponse.completed(await work())
+
+        job = await runner.submit(ref.slug(), work)
+        logger.info("Queued apply %s for %s (mode=%s)", job.job_id, ref.slug(), body.mode.value)
+
+        if body.mode is ReviewMode.ASYNC:
+            return _accepted(job, ApplyResponse)
+
+        finished = await runner.wait_for(job.job_id, timeout=_sync_wait(body))
+        if finished and finished.status is JobStatus.COMPLETED:
+            return ApplyResponse.from_job(finished)
+        if finished and finished.status is JobStatus.FAILED:
+            return JSONResponse(
+                status_code=500, content=ApplyResponse.from_job(finished).model_dump()
+            )
+        return _accepted(finished or job, ApplyResponse)
+
     @router.post("/config/effective", response_model=ConfigResponse)
     async def effective_config(body: ConfigRequest, request: Request):
         ref = body.to_ref()
@@ -112,14 +149,15 @@ def build_router(runner: JobRunner) -> APIRouter:
                 "scm": known_scm_connectors(),
                 "quality": known_quality_connectors(),
                 "reviewer": known_reviewers(),
+                "applier": known_appliers(),
             },
         )
 
     return router
 
 
-def _accepted(job) -> JSONResponse:
-    return JSONResponse(status_code=202, content=ReviewResponse.from_job(job).model_dump())
+def _accepted(job, response_cls: type = ReviewResponse) -> JSONResponse:
+    return JSONResponse(status_code=202, content=response_cls.from_job(job).model_dump())
 
 
 def _sync_wait(body: ReviewRequest) -> float:

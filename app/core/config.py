@@ -75,6 +75,14 @@ class EffectiveConfig(BaseModel):
     status_genre: str = "pr-review-agent"
     status_name: str = "ai-code-review"
 
+    # --- apply ---
+    #: Opt-in: the bot pushes code only when a repo explicitly turns this on.
+    allow_apply_fixes: bool = False
+    #: Plugin selection, same family as `reviewer`/`quality`. "noop" (the
+    #: default) never produces a change, so `allow_apply_fixes` alone can't
+    #: push anything — both have to be set.
+    applier: str = "noop"
+
     def fingerprint(self) -> str:
         """Short stable hash, attached to traces so a review is reproducible."""
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)

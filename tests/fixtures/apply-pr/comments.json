@@ -1,0 +1,11 @@
+[
+  {
+    "thread_id": "comment-1",
+    "marker": "prreview:abc123def456",
+    "is_closed": false,
+    "file": "example.py",
+    "line": 2,
+    "body": "🟠 **WARNING** · `python.style.spacing`\n\nMissing spaces around the + operator.\n\n**Suggestion**\n\n    return a + b\n\n<!-- prreview:abc123def456 -->",
+    "author": "ai-reviewer-bot"
+  }
+]

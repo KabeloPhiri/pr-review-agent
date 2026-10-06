@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import EffectiveConfig
 from app.core.jobs import Job, JobStatus
-from app.core.models import PullRequestRef, ReviewResult
+from app.core.models import ApplyResult, PullRequestRef, ReviewResult
 
 
 class ReviewMode(str, Enum):
@@ -76,6 +76,34 @@ class ReviewResponse(BaseModel):
 
 class ConfigRequest(ReviewRequest):
     """Same addressing as a review; resolves configuration without running one."""
+
+
+class ApplyRequest(ReviewRequest):
+    """Same addressing (and `mode`/`scm_token`) as a review, plus which
+    existing comment to accept and who is asking."""
+
+    comment_id: str
+    requester: str
+
+
+class ApplyResponse(BaseModel):
+    status: str = Field(description="completed | queued | running | failed")
+    job_id: str | None = None
+    result: ApplyResult | None = None
+    error: str | None = None
+
+    @classmethod
+    def from_job(cls, job: Job) -> "ApplyResponse":
+        return cls(
+            status=job.status.value,
+            job_id=job.job_id,
+            result=job.result,
+            error=job.error,
+        )
+
+    @classmethod
+    def completed(cls, result: ApplyResult) -> "ApplyResponse":
+        return cls(status=JobStatus.COMPLETED.value, result=result)
 
 
 class ConfigResponse(BaseModel):
