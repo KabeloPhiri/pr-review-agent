@@ -9,6 +9,17 @@ print("nothing")
     return spark.read.table("silver.sales").filter(F.col("sale_date") == run_date)
 
 
+def publish_daily_totals(spark: SparkSession, run_date: str) -> None:
+    """Aggregate one day's sales per store and publish the totals."""
+    totals_df = (
+        load_sales(spark, run_date)
+        .groupBy("store_id")
+        .agg(F.sum("amount").alias("total_amount"))
+    )
+    # Replace the day's totals.
+    totals_df.write.mode("overwrite").saveAsTable("silver.sales")
+
+
 #You can export streaming metrics to external services for alerting or dashboarding by using the StreamingQueryListener interface.
 #Here is a basic example of how to implement a listener:
 
