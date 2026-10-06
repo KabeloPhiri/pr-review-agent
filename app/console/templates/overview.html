@@ -10,7 +10,8 @@
   <h2 id="reviews-h">Reviews</h2>
   <div class="kpis">
     {{ kpi("Reviews", data.reviews | num) }}
-    {{ kpi("Pass rate", data.pass_rate | pct, "of completed reviews") }}
+    {{ kpi("Pass rate", data.pass_rate | pct,
+           ("excludes " ~ data.unrecorded_reviews ~ " from before outcome tracking") if data.unrecorded_reviews else "of completed reviews") }}
     {{ kpi("Failed to run", data.failed | num, "model or SCM errors") }}
     {{ kpi("Findings", data.findings | num) }}
     {{ kpi("p50 duration (s)", data.p50_seconds | secs) }}

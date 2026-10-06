@@ -157,3 +157,31 @@ def test_cached_source_reuses_one_query():
     cached.last_days(7)
     cached.last_days(30)
     assert len(calls) == 2
+
+
+def test_traces_from_before_tagging_are_not_misreported():
+    """Older traces have no outcome tags: count them, but never as refused/gated."""
+    old_review = TraceRecord(
+        trace_id="old-r", kind=analytics.REVIEW, timestamp_ms=T0, duration_ms=1000, state="OK"
+    )
+    old_apply = TraceRecord(
+        trace_id="old-a", kind=analytics.APPLY, timestamp_ms=T0, duration_ms=1000, state="OK"
+    )
+    data = analytics.overview([old_review, old_apply, review(A, passed=True)])
+    assert (data.reviews, data.passed, data.gated, data.unrecorded_reviews) == (2, 1, 0, 1)
+    assert data.pass_rate == 1.0
+    assert dict(data.apply_outcomes) == {"outcome not recorded": 1}
+
+
+def test_repository_is_derived_from_the_slug_on_older_traces():
+    info = SimpleNamespace(
+        trace_id="tr-old",
+        timestamp_ms=T0,
+        execution_duration=10,
+        state="OK",
+        tags={"mlflow.traceName": "pr_review"},
+        trace_metadata={"pr.slug": "KabeloPhiri/pr-review-agent#9", "pr.scm": "github"},
+        token_usage=None,
+    )
+    record = analytics.record_from_info(info)
+    assert (record.repo, record.pr) == ("github/KabeloPhiri__pr-review-agent", "9")

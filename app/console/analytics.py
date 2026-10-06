@@ -66,6 +66,11 @@ class TraceRecord:
             return 0
 
     @property
+    def outcome_recorded(self) -> bool:
+        """Outcome tags exist only on traces written since the console shipped."""
+        return any(key in self.tags for key in ("prreview.passed", "prreview.applied"))
+
+    @property
     def day(self) -> str:
         return datetime.fromtimestamp(self.timestamp_ms / 1000, tz=timezone.utc).strftime(
             "%Y-%m-%d"
@@ -82,14 +87,20 @@ def record_from_info(info: Any) -> TraceRecord:
     meta = dict(getattr(info, "trace_metadata", None) or {})
     usage = dict(getattr(info, "token_usage", None) or {})
     state = getattr(info, "state", "")
+    repo, pr = meta.get("pr.repo", ""), meta.get("pr.number", "")
+    if not repo and meta.get("pr.slug") and meta.get("pr.scm"):
+        # Traces written before repository tagging still carry the PR slug
+        # (`owner/repo#9`), so older reviews can be grouped too.
+        slug, _, number = meta["pr.slug"].rpartition("#")
+        repo, pr = f"{meta['pr.scm']}/{slug.replace('/', '__')}", pr or number
     return TraceRecord(
         trace_id=str(getattr(info, "trace_id", "") or getattr(info, "request_id", "")),
         kind=tags.get("mlflow.traceName", ""),
         timestamp_ms=int(getattr(info, "timestamp_ms", 0) or 0),
         duration_ms=int(getattr(info, "execution_duration", 0) or 0),
         state=getattr(state, "value", str(state)),
-        repo=meta.get("pr.repo", ""),
-        pr=meta.get("pr.number", ""),
+        repo=repo,
+        pr=pr,
         model=meta.get("config.model_endpoint", ""),
         input_tokens=int(usage.get("input_tokens", 0) or 0),
         output_tokens=int(usage.get("output_tokens", 0) or 0),
@@ -168,6 +179,8 @@ class Overview:
     applies: int = 0
     applied: int = 0
     apply_outcomes: list[tuple[str, int]] = field(default_factory=list)
+    #: Reviews from before outcome tagging: counted, but not in the pass rate.
+    unrecorded_reviews: int = 0
     truncated: bool = False
 
     @property
@@ -271,10 +284,14 @@ def overview(
                 out.passed += 1
             elif r.tag("passed") == "False":
                 out.gated += 1
+            else:
+                out.unrecorded_reviews += 1
         elif r.kind in (APPLY, APPLY_ALL):
             out.applies += 1
             if r.failed:
                 outcomes["failed"] += 1
+            elif not r.outcome_recorded:
+                outcomes["outcome not recorded"] += 1
             elif r.tag("applied") == "True":
                 out.applied += 1
                 outcomes["applied"] += 1

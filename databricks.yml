@@ -29,11 +29,11 @@ resources:
           - name: PRREVIEW_SEVERITY_GATE
             value: "error"
           # Admin console access (/console). Comma-separated emails; not
-          # editable from the console itself.
+          # editable from the console itself. Read-only users go in
+          # PRREVIEW_CONSOLE_VIEWERS — add it when there are any (Apps
+          # rejects an empty env value).
           - name: PRREVIEW_CONSOLE_ADMINS
             value: "k.phiri@decisioninc.com"
-          - name: PRREVIEW_CONSOLE_VIEWERS
-            value: ""
 
       # Resources this app is allowed to use.
       resources:
