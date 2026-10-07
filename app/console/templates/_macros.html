@@ -40,3 +40,37 @@
   <figcaption>{{ label }} ({{ unit }}), UTC days</figcaption>
 </figure>
 {%- endmacro %}
+
+{# Which settings an edit applies to. Repository scope needs a repository in the top bar. #}
+{% macro scope_switch(scope, repo, current) -%}
+<div class="scope-switch" role="group" aria-label="Settings scope">
+  <span class="scope-label">Applies to</span>
+  {% if repo %}
+    <a href="?{{ query(current) }}" {% if scope == 'repo' %}aria-current="true"{% endif %}>This repository ({{ repo }})</a>
+    <a href="?{{ query(current, scope='global') }}" {% if scope == 'global' %}aria-current="true"{% endif %}>Global</a>
+  {% else %}
+    <span aria-current="true">Global</span>
+    <span class="scope-hint">Select a repository in the top bar to change settings for that repository only.</span>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro store_banner(store_editable, store_location, store_problem, can_edit) -%}
+{% if not store_editable %}
+<div class="banner banner-info" role="status">Settings storage is not configured (PRREVIEW_SETTINGS_STORE), so settings are shown read-only.</div>
+{% elif store_problem %}
+<div class="banner banner-warning" role="status">Settings storage at {{ store_location }} could not be read: {{ store_problem }}. Reviews are using the last values read or the defaults.</div>
+{% elif not can_edit %}
+<div class="banner banner-info" role="status">Your access is read-only.</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro saved_line(entry) -%}
+{% if entry %}
+<p class="saved">Last {{ "deleted" if entry.action == "delete" else "restored" if entry.action == "rollback" else "saved" }} by {{ entry.actor }} at {{ entry.at | replace("T", " ") | replace("+00:00", " UTC") }}. <a href="/console/history?{{ query({}, path=entry.path) }}">History</a></p>
+{% endif %}
+{%- endmacro %}
+
+{% macro field_error(message) -%}
+{% if message %}<p class="field-error" role="alert">{{ message }}</p>{% endif %}
+{%- endmacro %}

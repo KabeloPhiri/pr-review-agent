@@ -6,6 +6,9 @@ Precedence, lowest to highest:
 2. app environment variables (`PRREVIEW_<FIELD>`), set in `databricks.yml`
 3. `.prreview/config.yaml` on the pull request's source branch
 4. per-request overrides in the POST body
+5. the admin console: global settings, then that repository's own settings
+   (`app/core/settings_store.py`) — an admin's choice wins over a repo's
+6. `pinned`: internal only, so the console can test a candidate setting
 
 Everything the reviewer does is driven by the resolved `EffectiveConfig`, so
 `GET /config/effective` is enough to debug a misbehaving repo without
@@ -141,20 +144,60 @@ def parse_repo_config(raw: str | None) -> dict[str, Any]:
     return data
 
 
+#: Layer names, lowest precedence first, as reported by `resolve_with_sources`.
+LAYERS = ("defaults", "environment", "repository", "request", "console", "pinned")
+
+
 def resolve(
     *,
     repo_config: dict[str, Any] | None = None,
     request_overrides: dict[str, Any] | None = None,
+    console_overrides: dict[str, Any] | None = None,
+    pinned: dict[str, Any] | None = None,
     environ: dict[str, str] | None = None,
 ) -> EffectiveConfig:
+    config, _ = resolve_with_sources(
+        repo_config=repo_config,
+        request_overrides=request_overrides,
+        console_overrides=console_overrides,
+        pinned=pinned,
+        environ=environ,
+    )
+    return config
+
+
+def resolve_with_sources(
+    *,
+    repo_config: dict[str, Any] | None = None,
+    request_overrides: dict[str, Any] | None = None,
+    console_overrides: dict[str, Any] | None = None,
+    pinned: dict[str, Any] | None = None,
+    environ: dict[str, str] | None = None,
+) -> tuple[EffectiveConfig, dict[str, str]]:
+    """`resolve()`, plus the layer that set each key.
+
+    Every key some layer sets appears, `app/defaults/config.yaml` included
+    (as "defaults"); a key no layer sets keeps its `EffectiveConfig` field
+    default and is absent from `sources`.
+    """
     merged: dict[str, Any] = {}
-    for layer in (
-        load_defaults(),
-        env_overrides(environ),
-        repo_config or {},
-        request_overrides or {},
+    sources: dict[str, str] = {}
+    for name, layer in zip(
+        LAYERS,
+        (
+            load_defaults(),
+            env_overrides(environ),
+            repo_config or {},
+            request_overrides or {},
+            console_overrides or {},
+            pinned or {},
+        ),
+        strict=True,
     ):
-        merged.update({k: v for k, v in layer.items() if v is not None})
+        for key, value in layer.items():
+            if value is not None:
+                merged[key] = value
+                sources[key] = name
 
     unknown = set(merged) - set(EffectiveConfig.model_fields)
     if unknown:
@@ -163,6 +206,6 @@ def resolve(
             detail="Valid keys: " + ", ".join(sorted(EffectiveConfig.model_fields)),
         )
     try:
-        return EffectiveConfig(**merged)
+        return EffectiveConfig(**merged), sources
     except ValidationError as exc:
         raise ConfigError("Invalid configuration", detail=exc.json()) from exc

@@ -122,7 +122,7 @@ def build_router(runner: JobRunner) -> APIRouter:
         scm = get_connector(ref.scm, token=token_from_request(request, body.scm_token))
         try:
             pr = await scm.get_pull_request(ref)
-            config = await pipeline.resolve_config(scm, pr, body.config)
+            config, sources = await pipeline.resolve_config_sources(scm, pr, body.config)
             raw = await scm.get_file_text(pr, config.config_path)
             bundle = await standards.load(scm, pr, config)
         finally:
@@ -131,6 +131,7 @@ def build_router(runner: JobRunner) -> APIRouter:
         return ConfigResponse(
             config=config,
             fingerprint=config.fingerprint(),
+            sources=sources,
             repo_config_path=config.config_path,
             repo_config_found=bool(raw and raw.strip()),
             standards_sources=bundle.sources,

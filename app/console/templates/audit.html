@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty, banner, store_banner %}
+{% block title %}Audit log{% endblock %}
+{% block heading %}Audit log{% endblock %}
+{% block body %}
+{{ store_banner(store_editable, store_location, store_problem, can_edit) }}
+{% if error %}{{ banner(error) }}{% endif %}
+{% if entries %}
+<table class="data">
+  <caption>Every settings change made in the console, newest first (up to 200){% if store_location %}. Stored in {{ store_location }}.{% endif %}</caption>
+  <thead><tr>
+    <th scope="col">When (UTC)</th><th scope="col">Change</th><th scope="col">File</th><th scope="col">By</th><th scope="col">History</th>
+  </tr></thead>
+  <tbody>
+  {% for e in entries %}
+    <tr>
+      <td>{{ e.at | replace("T", " ") | replace("+00:00", "") }}</td>
+      <td>{{ e.action | capitalize }}</td>
+      <td><code>{{ e.path }}</code></td>
+      <td>{{ e.actor }}</td>
+      <td><a href="/console/history?{{ query({}, path=e.path) }}">View</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  {{ empty("No settings changes yet") }}
+{% endif %}
+{% endblock %}

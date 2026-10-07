@@ -38,6 +38,7 @@ from typing import Any
 import yaml
 
 from app.core.models import DiffFile
+from app.core.settings_store import RepoKey, get_settings_store
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,9 @@ async def load(scm, pr, config) -> StandardsBundle:
     A missing repo file is normal (most repos will not have one at first), so
     it is recorded and skipped rather than failing the review.
     """
-    bundle = StandardsBundle(catalog=discover(), enabled=list(config.analyzers))
+    store = get_settings_store()
+    # The console's standards, when an admin has set any, replace the bundled set.
+    bundle = StandardsBundle(catalog=discover(store.standards_dir()), enabled=list(config.analyzers))
     texts: list[str] = []
     for path in config.standards:
         try:
@@ -255,5 +258,11 @@ async def load(scm, pr, config) -> StandardsBundle:
         if content and content.strip():
             texts.append(f"<!-- from {path} -->\n{content.strip()}")
             bundle.sources.append(path)
+    # Standards an admin added for this repository only, in the same slot as
+    # the repo's own files: they are this repository's rules.
+    console_text = store.repo_standards(RepoKey.from_ref(pr.ref))
+    if console_text:
+        texts.append(console_text)
+        bundle.sources.append("admin console (this repository)")
     bundle.repo_text = "\n\n".join(texts)
     return bundle

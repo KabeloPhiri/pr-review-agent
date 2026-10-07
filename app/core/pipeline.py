@@ -15,7 +15,7 @@ from typing import Any
 
 import mlflow
 
-from app.core.config import EffectiveConfig, parse_repo_config, resolve
+from app.core.config import EffectiveConfig, parse_repo_config, resolve, resolve_with_sources
 from app.core.errors import PrReviewError, ReviewerError, ScmConflictError, ScmError
 from app.core.models import (
     ApplyResult,
@@ -30,7 +30,7 @@ from app.core.models import (
     Severity,
     SkippedSuggestion,
 )
-from app.core.settings_store import RepoKey
+from app.core.settings_store import RepoKey, get_settings_store
 from app.services.apply import get_applier
 from app.services.policy import gate, standards
 from app.services.publish.formatter import parse_finding_comment
@@ -69,11 +69,31 @@ class ReviewPipeline:
         scm: ScmConnector,
         pr: PullRequest,
         overrides: dict[str, Any] | None,
+        *,
+        pinned: dict[str, Any] | None = None,
     ) -> EffectiveConfig:
-        """Layer repo config over defaults and env, then request overrides."""
-        bootstrap = resolve(request_overrides=overrides)
+        config, _ = await self.resolve_config_sources(scm, pr, overrides, pinned=pinned)
+        return config
+
+    async def resolve_config_sources(
+        self,
+        scm: ScmConnector,
+        pr: PullRequest,
+        overrides: dict[str, Any] | None,
+        *,
+        pinned: dict[str, Any] | None = None,
+    ) -> tuple[EffectiveConfig, dict[str, str]]:
+        """Repo config over defaults and env, then request overrides, then the
+        admin console's settings (global, then this repository's own)."""
+        console = _console_overrides(RepoKey.from_ref(pr.ref))
+        bootstrap = resolve(request_overrides=overrides, console_overrides=console, pinned=pinned)
         raw = await scm.get_file_text(pr, bootstrap.config_path)
-        return resolve(repo_config=parse_repo_config(raw), request_overrides=overrides)
+        return resolve_with_sources(
+            repo_config=parse_repo_config(raw),
+            request_overrides=overrides,
+            console_overrides=console,
+            pinned=pinned,
+        )
 
     @mlflow.trace(name="pr_review")
     async def run(
@@ -83,12 +103,13 @@ class ReviewPipeline:
         scm_token: str | None = None,
         overrides: dict[str, Any] | None = None,
         publish: bool = True,
+        pinned: dict[str, Any] | None = None,
     ) -> ReviewResult:
         _redact_trace_inputs(ref, overrides, publish=publish)
         scm = get_connector(ref.scm, token=scm_token)
         try:
             pr = await scm.get_pull_request(ref)
-            config = await self.resolve_config(scm, pr, overrides)
+            config = await self.resolve_config(scm, pr, overrides, pinned=pinned)
             _tag_trace(pr, config)
 
             standards_bundle = await standards.load(scm, pr, config)
@@ -96,6 +117,9 @@ class ReviewPipeline:
             findings, chunks_reviewed, skipped, warnings = await self._analyze(
                 scm, pr, diff, config, standards_bundle
             )
+            problem = get_settings_store().status()
+            if problem:
+                warnings.append(f"admin console settings unavailable ({problem}); used fallbacks")
 
             verdict = gate.evaluate(findings, config.severity_gate)
             result = ReviewResult(
@@ -497,6 +521,19 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
         merged.append(finding)
     merged.sort(key=lambda f: (f.file, f.line if f.line is not None else -1, -f.severity.rank))
     return merged
+
+
+def _console_overrides(repo: RepoKey) -> dict[str, Any]:
+    """The console's settings for `repo`, minus keys this version does not know.
+
+    The console validates on save, but a bad key must never take every review
+    down with a 400 — drop it here and say so in the log.
+    """
+    values = get_settings_store().config_overrides(repo)
+    unknown = set(values) - set(EffectiveConfig.model_fields)
+    if unknown:
+        logger.warning("Ignoring unknown admin console setting(s): %s", ", ".join(sorted(unknown)))
+    return {k: v for k, v in values.items() if k not in unknown}
 
 
 def _apply_refusal(config: EffectiveConfig, pr: PullRequest, requester: str) -> str | None:

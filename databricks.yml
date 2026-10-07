@@ -2,6 +2,22 @@ bundle:
   name: pr_review_agent
 
 resources:
+  # Storage for settings changed in the admin console (app/core/settings_store.py).
+  # In the dev target, bundle development mode prefixes the schema name.
+  schemas:
+    pr_review:
+      catalog_name: dia_ai_agent_solution
+      name: pr_review
+      comment: "PR review agent: admin console settings"
+
+  volumes:
+    console:
+      catalog_name: dia_ai_agent_solution
+      schema_name: ${resources.schemas.pr_review.name}
+      name: console
+      volume_type: MANAGED
+      comment: "Admin console settings, standards, prompts and their history"
+
   apps:
     pr_review_agent:
       name: "pr-review-agent"
@@ -34,6 +50,16 @@ resources:
           # rejects an empty env value).
           - name: PRREVIEW_CONSOLE_ADMINS
             value: "k.phiri@decisioninc.com"
+          # Where console settings are stored. `volume` reads them on every
+          # review (30s cache); `none` turns the console's editing off.
+          - name: PRREVIEW_SETTINGS_STORE
+            value: "volume"
+          - name: PRREVIEW_SETTINGS_VOLUME
+            value: "/Volumes/dia_ai_agent_solution/${resources.schemas.pr_review.name}/console"
+          # Models the console may switch to. Each needs a CAN_QUERY resource
+          # below; the app cannot be granted access at runtime.
+          - name: PRREVIEW_ALLOWED_MODELS
+            value: "databricks-claude-sonnet-5-5,databricks-claude-opus-5-5,databricks-claude-sonnet-5,databricks-claude-haiku-4-5,databricks-gpt-oss-120b,databricks-llama-4-maverick"
 
       # Resources this app is allowed to use.
       resources:
@@ -48,6 +74,37 @@ resources:
             # Must match PRREVIEW_MODEL_ENDPOINT above.
             name: 'databricks-claude-sonnet-5-5'
             permission: 'CAN_QUERY'
+
+        - name: 'model-claude-opus-5-5'
+          serving_endpoint:
+            name: 'databricks-claude-opus-5-5'
+            permission: 'CAN_QUERY'
+
+        - name: 'model-claude-sonnet-5'
+          serving_endpoint:
+            name: 'databricks-claude-sonnet-5'
+            permission: 'CAN_QUERY'
+
+        - name: 'model-claude-haiku-4-5'
+          serving_endpoint:
+            name: 'databricks-claude-haiku-4-5'
+            permission: 'CAN_QUERY'
+
+        - name: 'model-gpt-oss-120b'
+          serving_endpoint:
+            name: 'databricks-gpt-oss-120b'
+            permission: 'CAN_QUERY'
+
+        - name: 'model-llama-4-maverick'
+          serving_endpoint:
+            name: 'databricks-llama-4-maverick'
+            permission: 'CAN_QUERY'
+
+        - name: 'console-settings'
+          uc_securable:
+            securable_type: 'VOLUME'
+            securable_full_name: 'dia_ai_agent_solution.${resources.schemas.pr_review.name}.console'
+            permission: 'WRITE_VOLUME'
       # Who may call the app. Declared here (not set by hand in the UI) so the
       # grants survive the app being deleted and recreated. This list replaces
       # the app's ACL on deploy, so the owner is listed explicitly.

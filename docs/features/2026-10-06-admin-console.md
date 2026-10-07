@@ -82,9 +82,53 @@ the Repositories page. Databricks Apps rejects an empty env value, so
 
 ## Follow-ups
 
-- PR 2 (Control): `VolumeStore` in `main.pr_review.console`, console
+- PR 2 (Control): `VolumeStore` in a UC volume, console
   config layer, editable model/config/standards/prompts with history and
   rollback, per-repository settings.
 - PR 3 (Quality): `/fp` feedback and the False positives page.
 - Token figures cover only reviews run after this deploys; earlier traces
   have no usage spans.
+
+## Update 2026-10-06 — PR 2 of 3, Control (`feature/admin-console-control`)
+
+- **Store:** `app/core/settings_store.py` gains `FileStore` (history,
+  audit, path allowlist, 30s cache, degrade-on-failure), `LocalDirStore`
+  and `VolumeStore` (Files API).
+- **Config:** `resolve()` adds the console layers (global, then
+  per-repository) above repo and request, plus internal `pinned`;
+  `resolve_with_sources` reports each key's layer, also returned by
+  `POST /config/effective` as `sources`. Unknown console keys are dropped
+  at review time.
+- **Reviews:** standards come from the console when set, repository
+  standards are appended, prompt guidance from the console; a store outage
+  adds a warning to `ReviewResult`.
+- **Console:** `context.py` (shared access/rendering), `editing.py` with
+  Model (allowed models with state, test on the sample PR, prices), Config,
+  Standards (import bundled, edit, per-repository), Prompts, History
+  (side-by-side compare, restore), Audit log. Global changes, deletes and
+  rollbacks need a confirmation; edits are admins only and refused when
+  `Sec-Fetch-Site`/`Origin` show another site.
+- **Bundle:** schema + volume, `uc_securable` `WRITE_VOLUME` for the app,
+  `PRREVIEW_SETTINGS_*`, `PRREVIEW_ALLOWED_MODELS` with a `CAN_QUERY`
+  resource per model.
+
+**Catalog change:** the plan said `main.pr_review`. Deploy failed with
+`User does not have CREATE SCHEMA on Catalog 'main'` (only `USE_CATALOG`);
+on the user's choice it moved to `dia_ai_agent_solution`, where they have
+`ALL_PRIVILEGES`. Dev: `dia_ai_agent_solution.dev_k_phiri_pr_review.console`.
+
+**Plan deviations:** no HTMX/Chart.js (forms post normally; CSRF is checked
+with `Sec-Fetch-Site`/`Origin` instead of an `HX-Request` header); form
+bodies are parsed with `parse_qsl` rather than adding `python-multipart`.
+
+**Verification:**
+- `pytest -q` → 257 passed (196 before); ruff clean; `bundle validate` OK.
+- Dev: schema, volume and grant created; all settings pages 200 with the
+  volume readable; all six allowed models Ready.
+- Set `databricks-claude-haiku-4-5` for `fake/platform` only through the
+  console: its review used Haiku (4,471 tokens) — overriding even the
+  fixture repo's own pin — while `fake/platform-two` used Sonnet 5.5.
+- In-console model test, Opus 5.5 on the sample PR: 16.7s, 6,612 tokens,
+  10 findings, nothing posted.
+- Audit log recorded both changes with the admin's email; the test setting
+  was then removed.

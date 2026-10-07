@@ -167,6 +167,28 @@ the file's line endings and final newline.
 Azure DevOps is not wired up for this yet — it has no clean YAML-only trigger
 for a comment reply, unlike GitHub's `pull_request_review_comment` event.
 
+## Admin console
+
+`/console` on the deployed app (sign in through Databricks as usual):
+token usage and cost per model, reviews and pass rate, applies, and one row
+per repository — every page filters by repository and date range — plus the
+settings an admin can change without a redeploy:
+
+| Page | Change |
+|---|---|
+| Model | The review model, globally or for one repository; test it on the sample pull request first; prices per model for cost |
+| Config | Any `EffectiveConfig` key, globally or per repository |
+| Standards | The standards set (copy the bundled set in, then edit), or extra standards for one repository |
+| Prompts | The guidance part of the review and apply prompts (the output format stays fixed) |
+| Audit log / History | Who changed what and when; compare versions and restore |
+
+Console settings beat a repository's own `.prreview/config.yaml`. Access is
+two email allowlists in `databricks.yml` (`PRREVIEW_CONSOLE_ADMINS` edit,
+`PRREVIEW_CONSOLE_VIEWERS` read). Models must be listed in
+`PRREVIEW_ALLOWED_MODELS` with a `CAN_QUERY` resource. Settings are stored in
+the bundle's volume, `dia_ai_agent_solution.pr_review.console` (the dev
+target prefixes the schema).
+
 ## Local development
 
 ```bash

@@ -115,6 +115,9 @@ class ApplyResponse(BaseModel):
 class ConfigResponse(BaseModel):
     config: EffectiveConfig
     fingerprint: str
+    #: Which layer set each non-default key: defaults, environment,
+    #: repository, request, or console (see app/core/config.py).
+    sources: dict[str, str] = Field(default_factory=dict)
     repo_config_path: str
     repo_config_found: bool
     standards_sources: list[str] = Field(default_factory=list)
