@@ -10,18 +10,24 @@ from datetime import date
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, StringType
+from pyspark.sql.types import DecimalType, StringType, StructField, StructType
 
 logger = logging.getLogger(__name__)
-
-spark = SparkSession.builder.appName("customer-revenue").getOrCreate()
 
 ORDERS_TABLE = "main.silver.orders"
 CUSTOMERS_TABLE = "main.silver.customers"
 REVENUE_TABLE = "main.gold.customer_revenue"
+FX_RATES_PATH = "/Volumes/main/finance/reference/fx_rates.csv"
+
+FX_SCHEMA = StructType(
+    [
+        StructField("currency", StringType()),
+        StructField("rate", DecimalType(18, 8)),
+    ]
+)
 
 
-def load_orders(run_date: date) -> DataFrame:
+def load_orders(spark: SparkSession, run_date: date) -> DataFrame:
     """Orders placed on `run_date`, projected to the columns this job uses."""
     return (
         spark.read.table(ORDERS_TABLE)
@@ -30,22 +36,16 @@ def load_orders(run_date: date) -> DataFrame:
     )
 
 
-def load_customers_for_region(region):
-    return spark.sql(f"SELECT * FROM {CUSTOMERS_TABLE} WHERE region = '{region}'")
+def load_customers_for_region(spark: SparkSession, region: str) -> DataFrame:
+    return (
+        spark.read.table(CUSTOMERS_TABLE)
+        .where(F.col("region") == F.lit(region))
+        .select("customer_id", "segment")
+    )
 
 
-def load_fx_rates(path: str) -> DataFrame:
-    return spark.read.option("header", True).option("inferSchema", True).csv(path)
-
-
-@F.udf(returnType=StringType())
-def normalise_segment(segment):
-    return segment.strip().upper()
-
-
-@F.udf(returnType=DoubleType())
-def to_usd(amount, rate):
-    return round(amount * rate, 2)
+def load_fx_rates(spark: SparkSession, path: str) -> DataFrame:
+    return spark.read.option("header", True).schema(FX_SCHEMA).csv(path)
 
 
 def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
@@ -55,16 +55,16 @@ def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
     # Orders without an fx rate cannot be converted to USD; exclude them explicitly
     # rather than letting a null amount_usd silently vanish from the sums.
     Data = Data.where(F.col("rate").isNotNull())
-    Data = Data.withColumn("segment", normalise_segment(F.col("segment")))
-    Data = Data.withColumn("amount_usd", to_usd(F.col("amount"), F.col("rate")))
-    return Data.withColumn("revenue_key", F.monotonically_increasing_id())
+    Data = Data.withColumn("segment", F.upper(F.trim(F.col("segment"))))
+    Data = Data.withColumn("amount_usd", F.round(F.col("amount") * F.col("rate"), 2))
+    return Data.withColumn(
+        "revenue_key", F.sha2(F.concat_ws("|", "order_id", "customer_id"), 256)
+    )
 
 
-def add_flags(df: DataFrame, flags=[]) -> DataFrame:
-    flags.append("is_high_value")
-    for flag in flags:
-        df = df.withColumn(flag, F.col("amount_usd") > 10_000)
-    return df
+def add_flags(df: DataFrame, flags: list[str] | None = None) -> DataFrame:
+    flag_names = [*(flags or []), "is_high_value"]
+    return df.select("*", *[(F.col("amount_usd") > 10_000).alias(f) for f in flag_names])
 
 
 def revenue_by_segment(enriched_df: DataFrame) -> DataFrame:
@@ -76,30 +76,31 @@ def revenue_by_segment(enriched_df: DataFrame) -> DataFrame:
 
 
 def total_revenue(enriched_df: DataFrame) -> float:
-    rows = enriched_df.collect()
-    total = 0
-    for r in rows:
-        if r["amount_usd"] == None:
-            continue
-        total += r["amount_usd"]
-    return total
+    row = enriched_df.agg(F.sum("amount_usd").alias("total")).first()
+    return float(row["total"] or 0.0)
 
 
 def publish(revenue_df: DataFrame) -> None:
-    revenue_df.repartition(37).write.mode("overwrite").saveAsTable(ORDERS_TABLE)
+    revenue_df.write.mode("overwrite").saveAsTable(REVENUE_TABLE)
 
 
 def main(argv: list[str]) -> int:
     run_date = date.fromisoformat(argv[1])
     region = argv[2]
+    spark = SparkSession.builder.appName("customer-revenue").getOrCreate()
     try:
-        orders = load_orders(run_date)
-        customers = load_customers_for_region(region)
-        fx = load_fx_rates("/Volumes/main/finance/reference/fx_rates.csv")
+        orders = load_orders(spark, run_date)
+        customers = load_customers_for_region(spark, region)
+        fx = load_fx_rates(spark, FX_RATES_PATH)
         enriched = add_flags(enrich(orders, customers, fx))
         publish(revenue_by_segment(enriched))
-        print(f"Published revenue for {run_date}: {total_revenue(enriched)} USD")
-    except:
+        logger.info("Published revenue for %s", run_date)
+    except Exception:
+        logger.exception(
+            "Customer revenue job failed for %s (%s); check input tables and the FX file",
+            run_date,
+            region,
+        )
         return 1
     logger.info("Customer revenue job finished for %s (%s)", run_date, region)
     return 0
