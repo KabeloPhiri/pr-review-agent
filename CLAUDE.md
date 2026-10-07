@@ -241,7 +241,10 @@ set an explicit list to narrow.
 
 ## Testing
 
-Tests run offline. `app/services/scm/fake.py` replays the fixtures in
+CI runs the whole suite on every pull request push (the `tests` job in
+`.github/workflows/pr-pipeline.yml`, Python 3.12, fresh `pip install -e .`),
+including pushes made by `/apply` — so a bot-applied fix is tested before
+merge. Tests run offline. `app/services/scm/fake.py` replays the fixtures in
 `tests/fixtures/sample-pr/` (pr.json, diff.patch, `files/` for repo config and
 standards), and `tests/test_azure_devops.py` drives the real connector against
 an `httpx.MockTransport` — that file is where the REST 7.1 request shapes are
