@@ -187,3 +187,21 @@ def test_console_beats_repo_and_request_and_pinned_beats_console():
 def test_repo_names_containing_double_underscores_round_trip(scm, slug):
     key = RepoKey(scm, slug)
     assert RepoKey.parse(key.path) == key
+
+
+def test_a_good_read_of_one_file_does_not_hide_a_problem_with_another(store):
+    store.write("config.yaml", "max_files: [unclosed\n", actor="a@x")
+    store.write("console.yaml", "prices: {}\n", actor="a@x")
+    store.config_overrides()  # config.yaml is invalid
+    store.console_settings()  # console.yaml reads fine afterwards
+    assert "config.yaml is not valid YAML" in (store.status() or "")
+
+    store.write("config.yaml", "max_files: 3\n", actor="a@x")
+    store.config_overrides()
+    assert store.status() is None  # fixed, so the warning clears
+
+
+def test_history_skips_a_corrupt_entry(store):
+    store.write("console.yaml", "a: 1\n", actor="a@x")
+    (store.root / "history" / "20260101T000000000000Z~console.yaml.json").write_text("{bad")
+    assert [e.action for e in store.history("console.yaml")] == ["save"]

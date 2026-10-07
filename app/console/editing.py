@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import math
 import os
 import re
 import time
@@ -129,11 +130,19 @@ def register(router: APIRouter, ctx: ConsoleContext) -> None:
                 cells = {k: form.get(f"{k}:{model}", "").strip() for k in ("input", "output")}
                 if any(cells.values()):
                     table[model] = {k: float(v or 0) for k, v in cells.items()}
-                    if min(table[model].values()) < 0:
+                    # float() accepts "nan" and "inf"; NaN also slips past `< 0`.
+                    if not all(math.isfinite(v) and v >= 0 for v in table[model].values()):
                         raise ValueError
         except ValueError:
             return await model_page(
-                request, user, price_error="Prices must be numbers of zero or more."
+                request, user, price_error="Prices must be finite numbers of zero or more."
+            )
+        if form.get("confirm") != "yes":
+            return _confirm(
+                ctx, request, user, form,
+                title="Change model prices",
+                effect="Cost figures for every repository are calculated with these prices.",
+                action="/console/model/prices",
             )
         store = _store()
         console = _yaml_or_empty(store.raw(CONSOLE_FILE))
@@ -342,8 +351,14 @@ def register(router: APIRouter, ctx: ConsoleContext) -> None:
         store = _store_or_none()
         path = request.query_params.get("path", "")
         version = request.query_params.get("version")
-        entries = store.history(path) if store and path else []
-        compare, problem = None, None
+        entries, problem = [], None
+        if store and path:
+            try:
+                entries = store.history(path)
+            except Exception as exc:
+                logger.warning("Could not read history for %s", path, exc_info=True)
+                problem = f"Could not read the history: {exc}"
+        compare = None
         if store and version:
             try:
                 old = store.read_version(version) or ""
@@ -368,7 +383,13 @@ def register(router: APIRouter, ctx: ConsoleContext) -> None:
                 effect=f"The version saved as {version} replaces the current content.",
                 action="/console/history/restore",
             )
-        text = store.read_version(version)
+        try:
+            text = store.read_version(version)
+        except ValueError as exc:
+            return ctx.page(
+                request, "message", user, status_code=400, title="Cannot restore",
+                message=str(exc), active="audit",
+            )
         if text:
             store.write(path, text, actor=user.email, action="rollback")
         else:
@@ -379,7 +400,14 @@ def register(router: APIRouter, ctx: ConsoleContext) -> None:
 
     async def audit_page(request: Request, user: ConsoleUser) -> Response:
         store = _store_or_none()
-        return ctx.page(request, "audit", user, entries=store.history() if store else [])
+        entries, problem = [], None
+        if store:
+            try:
+                entries = store.history()
+            except Exception as exc:
+                logger.warning("Could not read the audit log", exc_info=True)
+                problem = f"Could not read the audit log from {store.location}: {exc}"
+        return ctx.page(request, "audit", user, entries=entries, error=problem)
 
     for path, handler in (
         ("/model", model_page),
@@ -450,6 +478,7 @@ def _last_change(path: str | None):
     try:
         entries = store.history(path, limit=1)
     except Exception:
+        logger.warning("Could not read the last change to %s", path, exc_info=True)
         return None
     return entries[0] if entries else None
 
@@ -554,6 +583,7 @@ def _endpoint_state(name: str) -> str:
         ready = getattr(getattr(endpoint, "state", None), "ready", None)
         state = "Ready" if getattr(ready, "value", ready) == "READY" else "Not ready"
     except Exception:
+        logger.warning("Could not read the state of serving endpoint %s", name, exc_info=True)
         state = "Unknown"
     _STATE_CACHE[name] = (time.monotonic(), state)
     return state
@@ -640,7 +670,7 @@ def _check_standard(name: str, text: str) -> str | None:
                 return "applies_to must be a mapping."
             unknown = set(applies) - _APPLIES_TO_KEYS
             if unknown:
-                return f"Unknown applies_to key(s): {', '.join(sorted(unknown))}."
+                return f"Unknown applies_to key(s): {', '.join(sorted(map(str, unknown)))}."
             pattern = applies.get("content_match")
             if pattern:
                 try:
