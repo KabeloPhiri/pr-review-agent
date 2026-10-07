@@ -1,3 +1,2 @@
-def sub(minuend: float, subtrahend: float) -> float:
-    return minuend - subtrahend
-
+def sub(a,b):
+    return a - b

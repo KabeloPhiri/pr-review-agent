@@ -18,6 +18,7 @@ from app.console.auth import ConsoleUser
 from app.console.context import HERE, ConsoleContext, prices
 from app.core.jobs import JobRunner
 from app.core.settings_store import get_settings_store
+from app.services.policy import standards
 
 REPO_SORT_KEYS = {
     "repo",
@@ -89,7 +90,21 @@ def build_console_router(
             **ctx.filters(records, repo, days),
         )
 
+    async def quality_page(request: Request, user: ConsoleUser) -> Response:
+        repo, days = ctx.common(request)
+        records, error = ctx.load(days)
+        return ctx.page(
+            request,
+            "quality",
+            user,
+            error=error,
+            data=analytics.quality(records, repo=repo),
+            standard_names=set(standards.discover(get_settings_store().standards_dir()).names()),
+            **ctx.filters(records, repo, days),
+        )
+
     router.get("")(ctx.guarded(overview_page))
+    router.get("/quality")(ctx.guarded(quality_page))
     router.get("/repositories")(ctx.guarded(repositories_page))
     router.get("/reviews")(ctx.guarded(reviews_page))
 

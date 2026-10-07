@@ -13,6 +13,7 @@ MLflow query is the only part that talks to anything, behind `TraceSource`.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -372,3 +373,135 @@ def sort_rows(rows: list[Any], key: str, descending: bool, allowed: set[str]) ->
     present = [row for row in rows if getattr(row, key) is not None]
     missing = [row for row in rows if getattr(row, key) is None]
     return sorted(present, key=lambda row: getattr(row, key), reverse=descending) + missing
+
+
+# -- quality: false positives, accepted fixes, duplicates ------------------------
+
+FEEDBACK = "pr_feedback"
+
+
+@dataclass
+class QualityRow:
+    """One rule, rule family, model or repository."""
+
+    key: str
+    posted: int = 0
+    flagged: int = 0
+    accepted: int = 0
+
+    @property
+    def fp_rate(self) -> float | None:
+        return self.flagged / self.posted if self.posted else None
+
+
+@dataclass
+class Flag:
+    timestamp_ms: int
+    repo: str
+    pr: str
+    rule: str
+    file: str
+    model: str
+    reason: str
+    by: str
+
+
+@dataclass
+class Duplicate:
+    timestamp_ms: int
+    repo: str
+    pr: str
+    file: str
+    line: str
+    old_rule: str
+    new_rule: str
+
+
+@dataclass
+class Quality:
+    posted: int = 0
+    flagged: int = 0
+    accepted: int = 0
+    by_rule: list[QualityRow] = field(default_factory=list)
+    by_family: list[QualityRow] = field(default_factory=list)
+    by_model: list[QualityRow] = field(default_factory=list)
+    by_repo: list[QualityRow] = field(default_factory=list)
+    flags: list[Flag] = field(default_factory=list)
+    duplicates: list[Duplicate] = field(default_factory=list)
+
+    @property
+    def fp_rate(self) -> float | None:
+        return self.flagged / self.posted if self.posted else None
+
+
+def rule_family(rule: str) -> str:
+    """`python.typing.missing` -> `python`: roughly the standard it came from."""
+    return rule.split(".", 1)[0] if rule else "unknown"
+
+
+def _json_tag(record: TraceRecord, name: str) -> Any:
+    try:
+        return json.loads(record.tag(name) or "null")
+    except ValueError:
+        return None
+
+
+def quality(records: list[TraceRecord], *, repo: str | None = None) -> Quality:
+    """False-positive rates: flags (`/fp`) over findings posted, per dimension."""
+    records = filter_repo(records, repo)
+    out = Quality()
+    tables: dict[str, dict[str, QualityRow]] = {
+        "rule": {}, "family": {}, "model": {}, "repo": {}
+    }
+
+    def bump(dimension: str, key: str, attr: str, amount: int = 1) -> None:
+        row = tables[dimension].setdefault(key, QualityRow(key=key))
+        setattr(row, attr, getattr(row, attr) + amount)
+
+    def count(rule: str, model: str, repo_name: str, attr: str, amount: int = 1) -> None:
+        bump("rule", rule, attr, amount)
+        bump("family", rule_family(rule), attr, amount)
+        bump("model", model or "unknown", attr, amount)
+        if repo_name:
+            bump("repo", repo_name, attr, amount)
+
+    for r in records:
+        if r.kind == REVIEW and not r.failed:
+            rules = _json_tag(r, "rules")
+            if isinstance(rules, dict):
+                for rule, n in rules.items():
+                    count(rule, r.model, r.repo, "posted", int(n))
+                    out.posted += int(n)
+            for d in _json_tag(r, "duplicate_rules") or []:
+                out.duplicates.append(
+                    Duplicate(r.timestamp_ms, r.repo, r.pr, d.get("file", ""), d.get("line", ""),
+                              d.get("old", ""), d.get("new", ""))
+                )
+        elif r.kind == FEEDBACK and r.tag("feedback") == "false_positive":
+            rule = r.tag("rule") or "unknown"
+            model = r.tag("finding_model") or r.model
+            count(rule, model, r.repo, "flagged")
+            out.flagged += 1
+            out.flags.append(
+                Flag(r.timestamp_ms, r.repo, r.pr, rule, r.tag("file"), model,
+                     r.tag("fp_reason"), r.tag("flagged_by"))
+            )
+        elif r.kind in (APPLY, APPLY_ALL) and r.tag("applied") == "True":
+            applied = _json_tag(r, "rules") if r.kind == APPLY_ALL else {r.tag("rule"): 1}
+            for rule, n in (applied or {}).items():
+                if rule:
+                    count(rule, r.model, r.repo, "accepted", int(n))
+                    out.accepted += int(n)
+
+    def ranked(dimension: str) -> list[QualityRow]:
+        return sorted(
+            tables[dimension].values(),
+            key=lambda row: (row.flagged, row.fp_rate or 0, row.posted),
+            reverse=True,
+        )
+
+    out.by_rule, out.by_family = ranked("rule"), ranked("family")
+    out.by_model, out.by_repo = ranked("model"), ranked("repo")
+    out.flags.sort(key=lambda f: f.timestamp_ms, reverse=True)
+    out.duplicates.sort(key=lambda d: d.timestamp_ms, reverse=True)
+    return out

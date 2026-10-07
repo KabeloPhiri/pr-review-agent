@@ -132,3 +132,61 @@ bodies are parsed with `parse_qsl` rather than adding `python-multipart`.
   10 findings, nothing posted.
 - Audit log recorded both changes with the admin's email; the test setting
   was then removed.
+
+## Update 2026-10-06 — PR 3 of 3, Quality (`feature/admin-console-quality`)
+
+- `/fp [reason]` → `pr-apply.yml` → `POST /feedback` →
+  `ReviewPipeline.feedback()`: a `pr_feedback` trace tagged with rule,
+  severity, file, model and reason; a reply in the thread; the thread
+  resolved. PR author or GitHub OWNER/MEMBER/COLLABORATOR only; others get
+  no reply; a second flag on the same comment is `already_recorded`.
+- `Finding.model` (set by `LlmReviewer`) is rendered as a second hidden
+  marker, `<!-- prreview:model:<endpoint> -->`, after the finding's marker
+  so first-marker lookups are unchanged; `parse_finding_comment` returns it.
+- Reviews tag `prreview.rules` (findings per rule) and suspected duplicates
+  (`Publisher.duplicates`: new comment on a line with an open comment under
+  a different rule id); applies tag the accepted rule(s).
+- Console: False positives page — rates (flags ÷ posted) by rule, rule
+  family (linked to the standard), model and repository; `/apply`
+  acceptances; recent flags with reasons; suspected duplicates.
+
+**Verification:** `pytest -q` → 279 passed (257 before); ruff clean.
+Deployed to dev. Live on throwaway PR #18 (targeting the part 3 branch with
+a test-only review trigger): both bot comments carried the model marker;
+`/fp` with a reason got the bot's reply and the thread was resolved; the
+console then showed 2 posted, 1 flagged, 50% overall,
+`python.missing-type-hint` 100%, and the flag with reason, file, model and
+who. PR #18 closed and its branch deleted.
+
+**Limitations:** flags count only comments posted since this deploy (older
+comments carry no model and older reviews no per-rule counts, so those show
+"unknown"/are not in the denominator). Rule families are the first segment
+of the model-invented rule id, which usually but not always names a
+standard.
+
+## Update 2026-10-06 — fixes from the AI review of #16
+
+The AI review on #16 (once retargeted to `master`) found one error and
+several real problems; fixed on `feature/admin-console` and carried up to
+parts 2 and 3 with merge commits (no force pushes):
+
+- Truncation warning judged before the repository filter (the error).
+- Overview and Repositories count applied suggestions the same way.
+- A slug without `#` is no longer turned into a broken repository name.
+- `RepoKey.parse` splits by the SCM's segment count, so names with `__`
+  round-trip.
+- Trace links URL-encode the id; the scheme check needs `http(s)://`.
+- The repository sort test checks both directions (it could not fail
+  before; confirmed by disabling sorting).
+- **Blocking I/O on the event loop.** Console handlers did MLflow queries
+  and volume I/O synchronously in `async` handlers, stalling `/review` and
+  background reviews in the same process. Part 1 moves the trace query to a
+  worker thread; part 2 runs every console handler on its own event loop in
+  a worker thread (`ConsoleContext.guarded`), so no page can stall the API.
+  Tests pair a slow page with a trivial endpoint: before, it waited 1.01s
+  (trace query) and 5.76s (settings page); after, it answers at once. Live
+  on dev: the Model page took 6.97s while `/review/<id>` answered in 0.81s.
+
+Re-review of #16 after the first round: 0 errors, 8 warnings, 12 info
+(remaining items are style or judgement calls). Tests: 202 / 265 / 287 for
+parts 1 / 2 / 3.

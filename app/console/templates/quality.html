@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% from "_macros.html" import kpi, empty, banner %}
+{% block title %}False positives{% endblock %}
+{% block heading %}False positives{% endblock %}
+{% block body %}
+{% set current = {"repo": repo, "days": days} %}
+{% if error %}{{ banner(error) }}{% endif %}
+<p class="hint">A finding is flagged when someone with write access replies <code>/fp</code>, optionally followed by a reason, on the bot's comment. The rate is flags divided by findings posted. Accepted counts fixes taken with <code>/apply</code>.</p>
+
+<div class="kpis">
+  {{ kpi("Findings posted", data.posted | num) }}
+  {{ kpi("Flagged as false positive", data.flagged | num) }}
+  {{ kpi("False-positive rate", data.fp_rate | pct) }}
+  {{ kpi("Accepted with /apply", data.accepted | num) }}
+  {{ kpi("Suspected duplicates", data.duplicates | length | num, "same line, renamed rule") }}
+</div>
+
+{% macro quality_table(rows, title, first_col, link_family=False, limit=50) -%}
+<table class="data">
+  <caption>{{ title }}</caption>
+  <thead><tr>
+    <th scope="col">{{ first_col }}</th>
+    <th scope="col" class="num">Posted</th>
+    <th scope="col" class="num">Flagged</th>
+    <th scope="col" class="num">False-positive rate</th>
+    <th scope="col" class="num">Accepted</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows[:limit] %}
+    <tr>
+      <td>{% if link_family and row.key in standard_names %}<a href="/console/standards?{{ query(current, name=row.key) }}"><code>{{ row.key }}</code></a>{% else %}<code>{{ row.key }}</code>{% endif %}</td>
+      <td class="num">{{ row.posted | num }}</td>
+      <td class="num">{{ row.flagged | num }}</td>
+      <td class="num">{{ row.fp_rate | pct }}</td>
+      <td class="num">{{ row.accepted | num }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro %}
+
+{% if data.by_rule %}
+<section aria-labelledby="rule-h">
+  <h2 id="rule-h">By rule</h2>
+  {{ quality_table(data.by_rule, "Most-flagged rules first (top 50)", "Rule") }}
+</section>
+<section aria-labelledby="family-h">
+  <h2 id="family-h">By rule family</h2>
+  {{ quality_table(data.by_family, "The first part of the rule id, which usually names the standard. Linked where a standard of that name exists.", "Rule family", link_family=True) }}
+</section>
+<section aria-labelledby="model-h">
+  <h2 id="model-h">By model</h2>
+  {{ quality_table(data.by_model, "The model that wrote each finding", "Model endpoint") }}
+</section>
+{% if not repo %}
+<section aria-labelledby="repo-h">
+  <h2 id="repo-h">By repository</h2>
+  {{ quality_table(data.by_repo, "Select a repository in the top bar to see only its figures", "Repository") }}
+</section>
+{% endif %}
+{% else %}
+  {{ empty("No findings or flags in this range", "Findings are counted for reviews run since the console was deployed.") }}
+{% endif %}
+
+<section aria-labelledby="flags-h">
+  <h2 id="flags-h">Recent flags</h2>
+  {% if data.flags %}
+  <table class="data">
+    <thead><tr>
+      <th scope="col">Time</th><th scope="col">Repository</th><th scope="col">Pull request</th>
+      <th scope="col">Rule</th><th scope="col">File</th><th scope="col">Model</th>
+      <th scope="col">Reason</th><th scope="col">Flagged by</th>
+    </tr></thead>
+    <tbody>
+    {% for f in data.flags[:100] %}
+      <tr>
+        <td>{{ f.timestamp_ms | ts }}</td>
+        <td>{{ f.repo or "n/a" }}</td>
+        <td>{% set url = pr_url(f.repo, f.pr) %}{% if url %}<a href="{{ url }}">#{{ f.pr }}</a>{% else %}{{ f.pr or "n/a" }}{% endif %}</td>
+        <td><code>{{ f.rule }}</code></td>
+        <td><code>{{ f.file }}</code></td>
+        <td><code>{{ f.model }}</code></td>
+        <td>{{ f.reason or "None given" }}</td>
+        <td>{{ f.by }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No findings flagged in this range") }}
+  {% endif %}
+</section>
+
+<section aria-labelledby="dup-h">
+  <h2 id="dup-h">Suspected duplicates</h2>
+  {% if data.duplicates %}
+  <table class="data">
+    <caption>A new comment posted on a line that already had one under a different rule id, usually the model renaming the rule between runs</caption>
+    <thead><tr>
+      <th scope="col">Time</th><th scope="col">Repository</th><th scope="col">Pull request</th>
+      <th scope="col">File</th><th scope="col" class="num">Line</th>
+      <th scope="col">Earlier rule</th><th scope="col">New rule</th>
+    </tr></thead>
+    <tbody>
+    {% for d in data.duplicates[:100] %}
+      <tr>
+        <td>{{ d.timestamp_ms | ts }}</td>
+        <td>{{ d.repo or "n/a" }}</td>
+        <td>{% set url = pr_url(d.repo, d.pr) %}{% if url %}<a href="{{ url }}">#{{ d.pr }}</a>{% else %}{{ d.pr or "n/a" }}{% endif %}</td>
+        <td><code>{{ d.file }}</code></td>
+        <td class="num">{{ d.line }}</td>
+        <td><code>{{ d.old_rule }}</code></td>
+        <td><code>{{ d.new_rule }}</code></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No suspected duplicates in this range") }}
+  {% endif %}
+</section>
+{% endblock %}

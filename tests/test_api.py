@@ -197,3 +197,15 @@ def test_apply_all_can_be_polled_on_the_apply_route(client):
     # noop changes nothing, so every suggestion is skipped, none applied.
     assert result["applied"] is False
     assert result["applied_comment_ids"] == []
+
+
+def test_feedback_is_recorded_synchronously(client):
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "apply-pr"
+    body = _body(fixture, comment_id="comment-1", requester="dev@example.com", mode="async")
+    response = client.post("/feedback", json=body)
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["recorded"] is True
+    assert result["rule_id"] == "python.style.spacing"

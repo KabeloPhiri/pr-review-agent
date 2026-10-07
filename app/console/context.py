@@ -36,6 +36,7 @@ NAV = (
     ("overview", "Overview", "/console"),
     ("repositories", "Repositories", "/console/repositories"),
     ("reviews", "Reviews", "/console/reviews"),
+    ("quality", "False positives", "/console/quality"),
     ("model", "Model", "/console/model"),
     ("config", "Config", "/console/config"),
     ("standards", "Standards", "/console/standards"),

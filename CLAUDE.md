@@ -91,6 +91,15 @@ usage per call and `_tag_trace`/`_tag_outcome` add `pr.repo` and
 edits are admins only and refused cross-site. The UI has no scripts and no
 icons or emoji — `tests/test_console*.py` scan every page for them.
 
+False positives: `/fp` replies go through `pr-apply.yml` to `POST /feedback`
+and `ReviewPipeline.feedback()`, which writes a `pr_feedback` trace. Rates
+need a denominator, so every review tags `prreview.rules` (findings per
+rule, JSON) and every finding's comment carries a second hidden marker,
+`<!-- prreview:model:<endpoint> -->`, *after* the finding's own marker —
+idempotency, `/apply` and the GitHub listing all read the first marker, so
+that order matters. `Publisher.duplicates` records new comments on a line
+that already has one under another rule id.
+
 ### Request modes and job state
 
 `sync` blocks; `async` returns `202 {job_id}`; `auto` (the default) waits

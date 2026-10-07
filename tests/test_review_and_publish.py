@@ -187,7 +187,7 @@ async def test_publish_leaves_apply_confirmations_and_replies_alone(pr):
     stale = await scm.post_comment(pr, CommentDraft(body="x", marker="prreview:stale1234"))
     await Publisher(scm, resolve()).publish(pr, _result([], passed=True))
     # Only the stale finding is closed; the confirmation and reply stay open.
-    assert scm.closed == [stale.id]
+    assert scm.closed == [stale]  # post_comment returns the thread id
 
 
 async def test_post_comments_disabled_still_sets_status(pr):
@@ -246,3 +246,16 @@ async def test_user_prompt_carries_the_json_keyword(fixture_dir):
     chunk = build_chunks(diff, config)[0][0]
 
     assert "json" in build_user_prompt(chunk, context)
+
+
+async def test_publish_reports_a_renamed_rule_on_the_same_line_as_a_duplicate(pr):
+    scm = FakeScmConnector()
+    publisher = Publisher(scm, resolve())
+    await publisher.publish(pr, _result([_finding(severity=Severity.ERROR)]))
+    assert publisher.duplicates == []
+
+    renamed = _finding(severity=Severity.ERROR).model_copy(update={"rule_id": "renamed.rule"})
+    second = Publisher(scm, resolve())
+    await second.publish(pr, _result([renamed]))
+    [dup] = second.duplicates
+    assert dup["new"] == "renamed.rule" and dup["old"] != "renamed.rule"

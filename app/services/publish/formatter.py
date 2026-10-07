@@ -19,6 +19,9 @@ _HEADER_RE = re.compile(r"\*\*(ERROR|WARNING|INFO)\*\*\s*·\s*`([^`]+)`\s*$")
 _SUGGESTION_HEADING = "**Suggestion**"
 _REPORTED_BY_RE = re.compile(r"^_Reported by .+\._$")
 _MARKER_LINE_RE = re.compile(r"<!--\s*prreview:[^\s>]+\s*-->")
+#: Second hidden marker naming the model, placed after the finding's own
+#: marker so every "first marker in the body" lookup still sees the finding.
+_MODEL_RE = re.compile(r"<!--\s*prreview:model:([^\s>]+)\s*-->")
 
 _EMOJI = {
     Severity.ERROR: "🔴",
@@ -54,6 +57,8 @@ def render_finding(finding: Finding) -> CommentDraft:
     if finding.source != "llm":
         lines += ["", f"_Reported by {finding.source}._"]
     lines += ["", f"<!-- {marker_for(finding)} -->"]
+    if finding.model:
+        lines.append(f"<!-- {MARKER_PREFIX}:model:{finding.model} -->")
 
     return CommentDraft(
         body="\n".join(lines),
@@ -146,11 +151,13 @@ def parse_finding_comment(body: str) -> dict | None:
         suggestion_end = reported_idx if reported_idx is not None else marker_idx
         suggestion = _strip_block(lines[suggestion_idx + 1 : suggestion_end]) or None
 
+    model = _MODEL_RE.search(body)
     return {
         "severity": severity,
         "rule_id": rule_id,
         "message": message,
         "suggestion": suggestion,
+        "model": model.group(1) if model else None,
     }
 
 

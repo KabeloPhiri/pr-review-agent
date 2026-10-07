@@ -7,3 +7,8 @@
 # PR_REVIEW_APPLY_TOKEN repo secret (see .github/workflows/pr-apply.yml).
 allow_apply_fixes: true
 applier: llm
+
+# Test fixtures are deliberately imperfect inputs. Reviewing them invites
+# /apply all to "fix" them, which breaks the tests that rely on them (it did
+# on #15: tests/fixtures/apply-all-pr/files/other.py).
+exclude_paths: ["tests/fixtures/**"]

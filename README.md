@@ -81,6 +81,7 @@ review.
 | `POST /apply` | Accept one bot suggestion and push it as a commit (opt-in; see below) |
 | `POST /apply/all` | Accept every open bot suggestion on the PR (one commit per file) |
 | `GET /apply/{job_id}` | Poll a background apply (single or all) |
+| `POST /feedback` | Flag one of the bot's comments as a false positive (`/fp`) |
 | `POST /config/effective` | Show the configuration a review would use |
 | `POST /invocations` | MLflow agent entry point; always synchronous |
 | `GET /health` | Health check (from the MLflow agent server) |
@@ -181,6 +182,16 @@ settings an admin can change without a redeploy:
 | Standards | The standards set (copy the bundled set in, then edit), or extra standards for one repository |
 | Prompts | The guidance part of the review and apply prompts (the output format stays fixed) |
 | Audit log / History | Who changed what and when; compare versions and restore |
+
+**False positives.** Reply **`/fp`**, optionally followed by a reason, on any
+bot comment to flag it as wrong. The PR author, and anyone with write access
+to the repository (GitHub `OWNER`, `MEMBER` or `COLLABORATOR`), may flag; the
+bot confirms in the thread and resolves it. The console's **False
+positives** page turns flags into rates (flags divided by findings posted)
+by rule, rule family, model and repository, next to how often each rule's
+fixes were accepted with `/apply`. It also lists suspected duplicates: a new
+comment on a line that already had one under a different rule id, usually
+the model renaming the rule between runs.
 
 Console settings beat a repository's own `.prreview/config.yaml`. Access is
 two email allowlists in `databricks.yml` (`PRREVIEW_CONSOLE_ADMINS` edit,

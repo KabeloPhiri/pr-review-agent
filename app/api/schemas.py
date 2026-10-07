@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field
 
 from app.core.config import EffectiveConfig
 from app.core.jobs import Job, JobStatus
-from app.core.models import ApplyResult, BulkApplyResult, PullRequestRef, ReviewResult
+from app.core.models import (
+    ApplyResult,
+    BulkApplyResult,
+    FeedbackResult,
+    PullRequestRef,
+    ReviewResult,
+)
 
 
 class ReviewMode(str, Enum):
@@ -90,6 +96,21 @@ class ApplyAllRequest(ReviewRequest):
     """`/apply all`: every open bot suggestion on the pull request."""
 
     requester: str
+
+
+class FeedbackRequest(ReviewRequest):
+    """`/fp`: flag one of the bot's comments as a false positive."""
+
+    comment_id: str
+    requester: str
+    #: GitHub's `author_association` for the requester (OWNER, MEMBER, ...).
+    association: str | None = None
+    reason: str | None = None
+
+
+class FeedbackResponse(BaseModel):
+    status: str = "completed"
+    result: FeedbackResult
 
 
 class ApplyResponse(BaseModel):

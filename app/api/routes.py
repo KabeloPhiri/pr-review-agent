@@ -7,6 +7,7 @@ Mounted on the MLflow `AgentServer` FastAPI app:
     POST /apply             accept one bot suggestion and push it as a commit
     POST /apply/all         accept every open bot suggestion (one commit per file)
     GET  /apply/{job_id}    poll a background apply (single or all)
+    POST /feedback          flag one of the bot's comments as a false positive
     POST /config/effective  show the configuration a review would use
 """
 
@@ -25,13 +26,15 @@ from app.api.schemas import (
     ApplyResponse,
     ConfigRequest,
     ConfigResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     ReviewMode,
     ReviewRequest,
     ReviewResponse,
 )
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
-from app.core.models import ApplyResult, BulkApplyResult, RepoRef, ReviewResult
+from app.core.models import ApplyResult, BulkApplyResult, PullRequestRef, ReviewResult
 from app.core.pipeline import ReviewPipeline
 from app.services.apply import known_appliers
 from app.services.policy import standards
@@ -112,6 +115,20 @@ def build_router(runner: JobRunner) -> APIRouter:
 
         return await _run_apply(runner, ref, body, work, "all suggestions")
 
+    @router.post("/feedback", response_model=FeedbackResponse)
+    async def feedback(body: FeedbackRequest, request: Request):
+        # No model call, so always synchronous whatever `mode` says.
+        result = await pipeline.feedback(
+            body.to_ref(),
+            scm_token=token_from_request(request, body.scm_token),
+            comment_id=body.comment_id,
+            requester=body.requester,
+            association=body.association,
+            reason=body.reason,
+            overrides=body.config,
+        )
+        return FeedbackResponse(result=result)
+
     @router.get("/apply/{job_id}", response_model=ApplyResponse)
     async def get_apply(job_id: str):
         return await _poll(runner, job_id, ApplyResponse, (ApplyResult, BulkApplyResult))
@@ -148,7 +165,7 @@ def build_router(runner: JobRunner) -> APIRouter:
 
 async def _run_apply(
     runner: JobRunner,
-    ref: RepoRef,
+    ref: PullRequestRef,
     body: ApplyRequest | ApplyAllRequest,
     work: Callable[[], Awaitable[ApplyResult | BulkApplyResult]],
     what: str,

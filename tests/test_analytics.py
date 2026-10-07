@@ -187,6 +187,63 @@ def test_repository_is_derived_from_the_slug_on_older_traces():
     assert (record.repo, record.pr) == ("github/KabeloPhiri__pr-review-agent", "9")
 
 
+# --- quality -------------------------------------------------------------------------
+
+
+def _tagged(kind, repo, model="m1", **tags):
+    return TraceRecord(
+        trace_id=f"{kind}-{repo}-{len(tags)}-{sorted(tags.items())}",
+        kind=kind,
+        timestamp_ms=T0,
+        duration_ms=10,
+        state="OK",
+        repo=repo,
+        pr="5",
+        model=model,
+        tags={f"prreview.{k}": v for k, v in tags.items()},
+    )
+
+
+QUALITY = [
+    _tagged(analytics.REVIEW, A, passed="False", rules='{"python.style": 3, "sql.select-star": 1}'),
+    _tagged(analytics.REVIEW, B, model="m2", passed="True", rules='{"python.style": 1}',
+            duplicate_rules='[{"file": "a.py", "line": "4", "old": "python.x", "new": "python.y"}]'),
+    _tagged(analytics.FEEDBACK, A, feedback="false_positive", rule="python.style",
+            finding_model="m1", fp_reason="generated", flagged_by="dev", file="a.py"),
+    _tagged(analytics.APPLY, A, applied="True", rule="sql.select-star"),
+    _tagged(analytics.APPLY_ALL, B, applied="True", rules='{"python.style": 1}'),
+]
+
+
+def test_false_positive_rate_per_rule_family_model_and_repo():
+    q = analytics.quality(QUALITY)
+    assert (q.posted, q.flagged, q.accepted) == (5, 1, 2)
+    assert q.fp_rate == pytest.approx(1 / 5)
+    by_rule = {r.key: r for r in q.by_rule}
+    assert (by_rule["python.style"].posted, by_rule["python.style"].flagged) == (4, 1)
+    assert by_rule["python.style"].fp_rate == pytest.approx(0.25)
+    assert by_rule["sql.select-star"].accepted == 1
+    assert {r.key: r.posted for r in q.by_family} == {"python": 4, "sql": 1}
+    assert {r.key: r.flagged for r in q.by_model} == {"m1": 1, "m2": 0}
+    assert q.by_rule[0].key == "python.style"  # most flagged first
+
+
+def test_flags_and_duplicates_are_listed_and_filterable():
+    q = analytics.quality(QUALITY)
+    [flag] = q.flags
+    assert (flag.rule, flag.reason, flag.by, flag.model) == ("python.style", "generated", "dev", "m1")
+    [dup] = q.duplicates
+    assert (dup.old_rule, dup.new_rule, dup.repo) == ("python.x", "python.y", B)
+
+    only_a = analytics.quality(QUALITY, repo=A)
+    assert (only_a.posted, only_a.flagged, only_a.duplicates) == (4, 1, [])
+
+
+def test_bad_json_tags_are_ignored():
+    record = _tagged(analytics.REVIEW, A, passed="True", rules="{not json")
+    assert analytics.quality([record]).posted == 0
+
+
 def test_truncation_is_judged_before_the_repository_filter(monkeypatch):
     monkeypatch.setattr(analytics, "MAX_TRACES", 4)
     records = [review(A), review(A, t=T0 + 1), review(B), review(B, t=T0 + 2)]
