@@ -58,8 +58,11 @@ class PullRequestRef(BaseModel):
     extra: dict[str, str] = Field(default_factory=dict)
 
     def slug(self) -> str:
-        parts = [p for p in (self.organization, self.project, self.repository) if p]
-        return "/".join(parts) + "#" + str(self.pull_request_id)
+        return self.repo_slug() + "#" + str(self.pull_request_id)
+
+    def repo_slug(self) -> str:
+        """The repository this pull request belongs to, without the PR number."""
+        return "/".join(p for p in (self.organization, self.project, self.repository) if p)
 
 
 class PullRequest(BaseModel):

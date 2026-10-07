@@ -148,3 +148,19 @@ async def test_all_replies_unparseable_does_not_pass_the_pull_request(ref, monke
     with pytest.raises(ReviewerError) as exc:
         await ReviewPipeline().run(ref, overrides={"reviewer": "stub"})
     assert "could not review any" in str(exc.value)
+
+
+async def test_trace_records_repository_and_outcome_for_the_console(ref):
+    """The admin console reads these instead of loading whole traces."""
+    import mlflow
+
+    result = await ReviewPipeline().run(ref, overrides={"reviewer": "stub"}, publish=False)
+    mlflow.flush_trace_async_logging()
+    info = mlflow.get_trace(result.trace_id).info
+
+    assert info.trace_metadata["pr.repo"] == "fake/contoso__data__platform"
+    assert info.trace_metadata["pr.number"] == "42"
+    assert info.tags["prreview.passed"] == "False"
+    assert info.tags["prreview.findings"] == "2"
+    assert info.tags["prreview.errors"] == "1"
+    assert info.tags["prreview.published"] == "False"

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_macros.html" import banner %}
+{% block title %}Prompts{% endblock %}
+{% block heading %}Prompts{% endblock %}
+{% block body %}
+{{ banner("Read-only in this release. The guidance becomes editable in the Control release; the output format is fixed in code so the reply parser cannot be broken by an edit.", "info") }}
+{% for p in prompts %}
+<section aria-labelledby="{{ p.name }}-h" class="document">
+  <h2 id="{{ p.name }}-h">{{ p.title }} prompt</h2>
+  <p class="meta">Guidance source: {{ "Console" if p.overridden else "Bundled with the app" }}</p>
+  <h3>Guidance</h3>
+  <pre class="text">{{ p.guidance }}</pre>
+  <h3>Output format (fixed)</h3>
+  <pre class="text muted">{{ p.contract }}</pre>
+</section>
+{% endfor %}
+{% endblock %}

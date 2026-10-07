@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty, banner %}
+{% block title %}Repositories{% endblock %}
+{% block heading %}Repositories{% endblock %}
+{% block body %}
+{% if error %}{{ banner(error) }}{% endif %}
+{% set current = {"repo": repo, "days": days} %}
+{% macro th(key, title, numeric=False) -%}
+  {% set is_sorted = sort == key %}
+  <th scope="col" class="{{ 'num' if numeric }}{{ ' sorted' if is_sorted }}"
+      aria-sort="{{ ('descending' if descending else 'ascending') if is_sorted else 'none' }}">
+    <a href="?{{ query(current, sort=key, dir=('asc' if is_sorted and descending else 'desc')) }}">{{ title }}</a>
+  </th>
+{%- endmacro %}
+{% if rows %}
+<table class="data">
+  <caption>One row per repository reviewed in this range. Select a repository to filter every page to it.</caption>
+  <thead><tr>
+    {{ th("repo", "Repository") }}
+    {{ th("reviews", "Reviews", True) }}
+    {{ th("pass_rate", "Pass rate", True) }}
+    {{ th("findings_per_review", "Findings per review", True) }}
+    {{ th("total_tokens", "Tokens", True) }}
+    {{ th("cost_usd", "Cost (USD)", True) }}
+    {{ th("applied", "Applied", True) }}
+    {{ th("last_review_ms", "Last review") }}
+    <th scope="col">Model</th>
+    <th scope="col">Settings</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td><a href="/console?{{ query(current, repo=r.repo) }}">{{ r.repo }}</a></td>
+      <td class="num">{{ r.reviews | num }}</td>
+      <td class="num">{{ r.pass_rate | pct }}</td>
+      <td class="num">{{ r.findings_per_review | num }}</td>
+      <td class="num">{{ r.total_tokens | num }}</td>
+      <td class="num">{{ r.cost_usd | usd }}</td>
+      <td class="num">{{ r.applied | num }}</td>
+      <td>{{ r.last_review_ms | ts }}</td>
+      <td>{% if r.last_model %}<code>{{ r.last_model }}</code>{% else %}n/a{% endif %}</td>
+      <td>{{ "Custom settings" if r.custom_settings else "Global" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  {{ empty("No repositories reviewed in this range", "Repositories appear here after their first review.") }}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_macros.html" import banner %}
+{% block title %}Config{% endblock %}
+{% block heading %}Config{% endblock %}
+{% block body %}
+{{ banner("Read-only in this release. A repository's own .prreview/config.yaml and per-request overrides are applied per review and are not shown here.", "info") }}
+<table class="data">
+  <caption>Effective configuration{{ " for " ~ repo if repo }}, and the layer each value comes from</caption>
+  <thead><tr>
+    <th scope="col">Setting</th>
+    <th scope="col">Value</th>
+    <th scope="col">Source</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><code>{{ row.name }}</code></td>
+      <td><code>{{ row.value }}</code></td>
+      <td>{{ row.source }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

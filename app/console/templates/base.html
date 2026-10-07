@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} - PR Review Console</title>
+  <link rel="stylesheet" href="/console/static/console.css">
+</head>
+<body>
+{% set current = {"repo": repo, "days": days} %}
+<header class="topbar">
+  <a class="product" href="/console?{{ query(current) }}">PR Review Console</a>
+  <form class="filters" method="get" action="">
+    <label for="repo">Repository</label>
+    <select id="repo" name="repo">
+      <option value="">All repositories</option>
+      {% for name in repos %}
+      <option value="{{ name }}" {% if name == repo %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+    <label for="days">Range</label>
+    <select id="days" name="days">
+      {% for d in day_choices %}
+      <option value="{{ d }}" {% if d == days %}selected{% endif %}>Last {{ d }} day{{ "s" if d != 1 }}</option>
+      {% endfor %}
+    </select>
+    {% for key, value in request.query_params.items() if key not in ("repo", "days") %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <button type="submit" class="button">Apply</button>
+  </form>
+  <div class="identity">
+    <span class="email">{{ user.email }}</span>
+    <span class="role">{{ "Admin" if user.can_edit else "Viewer" }}</span>
+  </div>
+</header>
+<div class="layout">
+  <nav class="sidenav" aria-label="Console">
+    <ul>
+      {% for key, title, href in nav %}
+      <li><a href="{{ href }}?{{ query(current) }}" {% if key == active %}aria-current="page"{% endif %}>{{ title }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  <main class="content">
+    <div class="page-head">
+      <h1>{% block heading %}{% endblock %}</h1>
+      <p class="scope">{{ repo or "All repositories" }}, last {{ days }} day{{ "s" if days != 1 }}</p>
+    </div>
+    {% block body %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

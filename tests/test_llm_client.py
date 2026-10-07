@@ -64,3 +64,30 @@ def test_unrelated_failure_still_raises():
     # It tried without response_format once, then gave up — temperature kept.
     assert len(client.calls) == 2
     assert client.calls[-1]["temperature"] == 0.0
+
+
+def test_each_call_records_its_token_usage_for_the_console():
+    import mlflow
+    from mlflow.tracing.constant import SpanAttributeKey
+
+    class UsageClient(FakeClient):
+        def _create(self, **kwargs):
+            response = super()._create(**kwargs)
+            response.usage = SimpleNamespace(
+                prompt_tokens=120, completion_tokens=30, total_tokens=150
+            )
+            return response
+
+    _complete(UsageClient(rejects={}))
+    mlflow.flush_trace_async_logging()
+    trace = mlflow.get_trace(mlflow.get_last_active_trace_id())
+
+    [span] = trace.data.spans
+    assert span.name == "llm:m"
+    assert span.attributes["model"] == "m"
+    assert span.get_attribute(SpanAttributeKey.CHAT_USAGE) == {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "total_tokens": 150,
+    }
+    assert trace.info.token_usage["total_tokens"] == 150
