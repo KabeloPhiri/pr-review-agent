@@ -174,7 +174,12 @@ def resolve_with_sources(
     pinned: dict[str, Any] | None = None,
     environ: dict[str, str] | None = None,
 ) -> tuple[EffectiveConfig, dict[str, str]]:
-    """`resolve()`, plus which layer set each key that is not a built-in default."""
+    """`resolve()`, plus the layer that set each key.
+
+    Every key some layer sets appears, `app/defaults/config.yaml` included
+    (as "defaults"); a key no layer sets keeps its `EffectiveConfig` field
+    default and is absent from `sources`.
+    """
     merged: dict[str, Any] = {}
     sources: dict[str, str] = {}
     for name, layer in zip(

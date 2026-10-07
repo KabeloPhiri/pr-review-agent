@@ -182,12 +182,12 @@ def test_model_test_shows_results_without_saving(client, store, monkeypatch):
 
 def test_prices_are_saved_and_validated(client, store):
     bad = _post(client, "/console/model/prices", {"input:databricks-claude-opus-5-5": "cheap"})
-    assert "Prices must be numbers" in bad.text
-    ok = _post(
-        client,
-        "/console/model/prices",
-        {"input:databricks-claude-opus-5-5": "15", "output:databricks-claude-opus-5-5": "75"},
-    )
+    assert "Prices must be finite numbers" in bad.text
+    form = {"input:databricks-claude-opus-5-5": "15", "output:databricks-claude-opus-5-5": "75"}
+    confirm = _post(client, "/console/model/prices", form)
+    assert "Change model prices" in confirm.text  # a global change: confirm first
+    assert "prices" not in store.console_settings()
+    ok = _post(client, "/console/model/prices", {**form, "confirm": "yes"})
     assert ok.status_code == 303
     assert store.console_settings()["prices"] == {
         "databricks-claude-opus-5-5": {"input": 15.0, "output": 75.0}
@@ -334,3 +334,43 @@ def test_form_posts_still_work_when_handled_off_the_event_loop(client, store):
     response = _post(client, f"/console/config?repo={REPO}", {"text": "max_files: 6"})
     assert response.status_code == 303
     assert store.raw("repos/github/acme__payments/config.yaml") == "max_files: 6"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-1"])
+def test_prices_must_be_finite_and_not_negative(client, store, value):
+    form = {"input:databricks-claude-opus-5-5": value, "confirm": "yes"}
+    response = _post(client, "/console/model/prices", form)
+    assert "finite numbers of zero or more" in response.text
+    assert store.console_settings() == {}
+
+
+def test_restoring_a_malformed_version_is_a_clear_error(client, store):
+    form = {"path": "config.yaml", "version": "not a version", "confirm": "yes"}
+    response = _post(client, "/console/history/restore", form)
+    assert response.status_code == 400
+    assert "Not a history version" in response.text
+
+
+def test_one_corrupt_history_entry_does_not_hide_the_audit_log(client, store):
+    store.write("prompts/apply_guidance.md", "x", actor="a@example.com")
+    (store.root / "history" / "20260101T000000000000Z~config.yaml.json").write_text("{broken")
+    page = client.get("/console/audit", headers=ADMIN)
+    assert page.status_code == 200
+    assert "prompts/apply_guidance.md" in page.text
+
+
+def test_an_unreadable_audit_log_is_explained(client, store, monkeypatch):
+    def broken(directory, directories=False):
+        raise OSError("volume unavailable")
+
+    monkeypatch.setattr(store, "_list", broken)
+    page = client.get("/console/audit", headers=ADMIN)
+    assert page.status_code == 200
+    assert "Could not read the audit log" in page.text and "volume unavailable" in page.text
+
+
+def test_front_matter_with_mixed_key_types_is_explained_not_a_crash(client, store):
+    text = "---\napplies_to:\n  1: x\n  langs: [python]\n---\nbody"
+    response = _post(client, f"/console/standards?repo={REPO}", {"name": "mixed", "text": text})
+    assert response.status_code == 200
+    assert "Unknown applies_to key(s): 1, langs." in response.text

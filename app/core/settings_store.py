@@ -190,7 +190,9 @@ class FileStore(ABC):
     def __init__(self, ttl_seconds: float = 30.0) -> None:
         self._ttl = ttl_seconds
         self._cache: dict[str, tuple[float, str | None]] = {}
-        self._problem: str | None = None
+        #: Problems by file (or listed directory). Per file, so a good read of
+        #: one file cannot hide that another is unreadable or invalid.
+        self._problems: dict[str, str] = {}
 
     # -- primitives (relative paths) ---------------------------------------
 
@@ -224,19 +226,22 @@ class FileStore(ABC):
             text = self._read(path)
         except Exception as exc:
             logger.warning("Could not read console setting %s", path, exc_info=True)
-            self._problem = f"could not read {path}: {exc}"
+            self._problems[path] = f"could not read {path}: {exc}"
             return hit[1] if hit else None
         self._cache[path] = (now, text)
-        self._problem = None
+        self._problems.pop(path, None)
         return text
 
     def _list_quietly(self, directory: str, *, directories: bool = False) -> list[str]:
+        key = f"{directory}/"
         try:
-            return self._list(directory, directories=directories)
+            names = self._list(directory, directories=directories)
         except Exception as exc:
             logger.warning("Could not list console settings in %s", directory, exc_info=True)
-            self._problem = f"could not list {directory}: {exc}"
+            self._problems[key] = f"could not list {directory}: {exc}"
             return []
+        self._problems.pop(key, None)
+        return names
 
     def _yaml(self, path: str) -> dict[str, Any]:
         raw = self.read_text(path)
@@ -245,10 +250,10 @@ class FileStore(ABC):
         try:
             data = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
-            self._problem = f"{path} is not valid YAML: {exc}"
+            self._problems[path] = f"{path} is not valid YAML: {exc}"
             return {}
         if not isinstance(data, dict):
-            self._problem = f"{path} must contain a mapping"
+            self._problems[path] = f"{path} must contain a mapping"
             return {}
         return data
 
@@ -314,7 +319,7 @@ class FileStore(ABC):
         return sorted(keys)
 
     def status(self) -> str | None:
-        return self._problem
+        return "; ".join(self._problems[k] for k in sorted(self._problems)) or None
 
     # -- writes (raise on failure: the admin must know) ------------------------
 
@@ -353,9 +358,13 @@ class FileStore(ABC):
             names = [n for n in names if n[:-5].split("~", 1)[-1] == path.replace("/", "~")]
         entries = []
         for name in names[:limit]:
-            raw = self._read(f"{HISTORY_DIR}/{name}")
-            if raw:
-                entries.append(HistoryEntry(**json.loads(raw)))
+            # One corrupt or unreadable entry must not hide the rest of the log.
+            try:
+                raw = self._read(f"{HISTORY_DIR}/{name}")
+                if raw:
+                    entries.append(HistoryEntry(**json.loads(raw)))
+            except Exception:
+                logger.warning("Skipping unreadable history entry %s", name, exc_info=True)
         return entries
 
     def read_version(self, version: str) -> str | None:
