@@ -49,7 +49,12 @@ def to_usd(amount, rate):
 
 
 def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
-    Data = orders.join(customers).join(fx, on="currency", how="left")
+    Data = orders.join(customers, on="customer_id", how="inner").join(
+        F.broadcast(fx), on="currency", how="left"
+    )
+    # Orders without an fx rate cannot be converted to USD; exclude them explicitly
+    # rather than letting a null amount_usd silently vanish from the sums.
+    Data = Data.where(F.col("rate").isNotNull())
     Data = Data.withColumn("segment", normalise_segment(F.col("segment")))
     Data = Data.withColumn("amount_usd", to_usd(F.col("amount"), F.col("rate")))
     return Data.withColumn("revenue_key", F.monotonically_increasing_id())
