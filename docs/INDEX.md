@@ -1,5 +1,6 @@
 | Date | Type | Title | Agent | Status | Note |
 |---|---|---|---|---|---|
+| 2026-10-07 | deployment | Run the test suite on every pull request | claude-code | implemented | [note](deployments/2026-10-07-ci-pytest.md) |
 | 2026-10-06 | feature | Admin console (3 PRs: Observe, Control, Quality) | claude-code | deployed-dev | [note](features/2026-10-06-admin-console.md) |
 | 2026-10-06 | feature | Several /apply replies per PR, and /apply all | claude-code | deployed-dev | [note](features/2026-10-06-apply-many-and-apply-all.md) |
 | 2026-10-06 | fix | Switch the reviewer model to Claude Sonnet 5.5 | claude-code | deployed-dev | [note](fixes/2026-10-06-switch-reviewer-to-claude-sonnet.md) |
