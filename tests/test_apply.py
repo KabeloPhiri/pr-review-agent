@@ -332,19 +332,6 @@ async def test_crlf_file_keeps_its_line_endings(tricky_ref):
     assert pushed == "def add(a, b):\r\n    return a + b"
 
 
-@pytest.mark.parametrize(
-    "original, new, expected",
-    [
-        ("a\r\nb\r\n", "a\nB\n", "a\r\nB\r\n"),
-        ("a\r\nb", "a\nB\n", "a\r\nB"),  # no final newline stays that way
-        ("a\nb\n", "a\nB", "a\nB\n"),  # a final newline is restored
-        ("a\nb\n", "a\r\nB\r\n", "a\nB\n"),  # LF file stays LF
-    ],
-)
-def test_match_line_endings(original, new, expected):
-    assert _match_line_endings(original, new) == expected
-
-
 async def test_failed_follow_ups_do_not_fail_a_landed_commit(tricky_ref):
     TrickyScm.fail_follow_ups = True
     result = await _apply(tricky_ref, ENABLED)
@@ -363,3 +350,19 @@ async def test_second_apply_of_the_same_comment_is_a_no_op(tricky_ref):
     second = await _apply(tricky_ref, ENABLED)
     assert second.reason == "already_applied"
     assert TrickyScm.last.updated_files == []
+
+
+# Deleted on #15 by an /apply that took "private name used outside its module"
+# literally; restored because they are the only direct tests of line-ending
+# preservation. Testing a private helper is fine.
+@pytest.mark.parametrize(
+    "original, new, expected",
+    [
+        ("a\r\nb\r\n", "a\nB\n", "a\r\nB\r\n"),
+        ("a\r\nb", "a\nB\n", "a\r\nB"),  # no final newline stays that way
+        ("a\nb\n", "a\nB", "a\nB\n"),  # a final newline is restored
+        ("a\nb\n", "a\r\nB\r\n", "a\nB\n"),  # LF file stays LF
+    ],
+)
+def test_match_line_endings(original, new, expected):
+    assert _match_line_endings(original, new) == expected

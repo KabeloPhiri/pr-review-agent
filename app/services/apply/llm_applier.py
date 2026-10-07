@@ -48,7 +48,7 @@ class LlmApplier(Applier):
         return self._client
 
     async def generate_patch(self, *, file: str, current_text: str, finding: Finding) -> str | None:
-        return await self._call(file, current_text, finding)
+        return await self._call(file, current_text, [finding])
 
     async def generate_patch_many(
         self, *, file: str, current_text: str, findings: list[Finding]
@@ -57,9 +57,7 @@ class LlmApplier(Applier):
         # they cannot fight each other, and it is one round trip, not N.
         return await self._call(file, current_text, findings)
 
-    async def _call(
-        self, file: str, current_text: str, findings: Finding | list[Finding]
-    ) -> str | None:
+    async def _call(self, file: str, current_text: str, findings: list[Finding]) -> str | None:
         content = await asyncio.to_thread(
             complete,
             self.client,
