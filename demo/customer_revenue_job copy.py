@@ -10,7 +10,7 @@ from datetime import date
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, StringType
+from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,13 @@ spark = SparkSession.builder.appName("customer-revenue").getOrCreate()
 ORDERS_TABLE = "main.silver.orders"
 CUSTOMERS_TABLE = "main.silver.customers"
 REVENUE_TABLE = "main.gold.customer_revenue"
+
+FX_SCHEMA = StructType(
+    [
+        StructField("currency", StringType(), True),
+        StructField("rate", DoubleType(), True),
+    ]
+)
 
 
 def load_orders(run_date: date) -> DataFrame:
@@ -30,36 +37,26 @@ def load_orders(run_date: date) -> DataFrame:
     )
 
 
-def load_customers_for_region(region):
-    return spark.sql(f"SELECT * FROM {CUSTOMERS_TABLE} WHERE region = '{region}'")
+def load_customers_for_region(region: str) -> DataFrame:
+    return (spark.read.table(CUSTOMERS_TABLE)
+        .where(F.col("region") == F.lit(region))
+        .select("customer_id", "segment", "region"))
 
 
 def load_fx_rates(path: str) -> DataFrame:
-    return spark.read.option("header", True).option("inferSchema", True).csv(path)
-
-
-@F.udf(returnType=StringType())
-def normalise_segment(segment):
-    return segment.strip().upper()
-
-
-@F.udf(returnType=DoubleType())
-def to_usd(amount, rate):
-    return round(amount * rate, 2)
+    return spark.read.option("header", True).schema(FX_SCHEMA).csv(path)
 
 
 def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
     Data = orders.join(F.broadcast(customers), on="customer_id", how="left").join(F.broadcast(fx), on="currency", how="left")
-    Data = Data.withColumn("segment", normalise_segment(F.col("segment")))
-    Data = Data.withColumn("amount_usd", to_usd(F.col("amount"), F.col("rate")))
-    return Data.withColumn("revenue_key", F.monotonically_increasing_id())
+    Data = Data.withColumn("segment", F.upper(F.trim(F.col("segment"))))
+    Data = Data.withColumn("amount_usd", F.round(F.col("amount") * F.col("rate"), 2))
+    return Data.withColumn("revenue_key", F.sha2(F.concat_ws("|", "order_id", "customer_id"), 256))
 
 
-def add_flags(df: DataFrame, flags=[]) -> DataFrame:
-    flags.append("is_high_value")
-    for flag in flags:
-        df = df.withColumn(flag, F.col("amount_usd") > 10_000)
-    return df
+def add_flags(df: DataFrame, flags: list[str] | None = None) -> DataFrame:
+    all_flags = [*(flags or []), "is_high_value"]
+    return df.select("*", *[(F.col("amount_usd") > 10_000).alias(f) for f in all_flags])
 
 
 def revenue_by_segment(enriched_df: DataFrame) -> DataFrame:
@@ -71,27 +68,13 @@ def revenue_by_segment(enriched_df: DataFrame) -> DataFrame:
 
 
 def total_revenue(enriched_df: DataFrame) -> float:
-    rows = enriched_df.collect()
-    total = 0
-    for r in rows:
-        if r["amount_usd"] == None:
-            continue
-        total += r["amount_usd"]
-    return total
+    return enriched_df.agg(F.sum("amount_usd")).first()[0] or 0.0
 
 def avg_revenue(enriched_df: DataFrame) -> float:
-    rows = enriched_df.collect()
-    total = 0
-    count = 0
-    for r in rows:
-        if r["amount_usd"] == None:
-            continue
-        total += r["amount_usd"]
-        count += 1
-    return total / cnt if count > 0 else 0.0
+    return enriched_df.agg(F.avg("amount_usd")).first()[0] or 0.0
 
 def publish(revenue_df: DataFrame) -> None:
-    revenue_df.repartition(37).write.mode("overwrite").saveAsTable(ORDERS_TABLE)
+    revenue_df.write.mode("overwrite").saveAsTable(REVENUE_TABLE)
 
 
 def main(argv: list[str]) -> int:
@@ -104,10 +87,11 @@ def main(argv: list[str]) -> int:
         enriched = add_flags(enrich(orders, customers, fx))
         publish(revenue_by_segment(enriched))
         print(f"Published revenue for {run_date}: {total_revenue(enriched)} USD")
-    except:
+    except Exception:
+        logger.exception("Customer revenue job failed for %s (%s)", run_date, region)
         return 1
     logger.info("Customer revenue job finished for %s (%s)", run_date, region)
-    return 2
+    return 0
 
 
 if __name__ == "__main__":
