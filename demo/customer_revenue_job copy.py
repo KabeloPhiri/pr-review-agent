@@ -49,7 +49,7 @@ def to_usd(amount, rate):
 
 
 def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
-    Data = orders.join(customers).join(fx, on="currency", how="left")
+    Data = orders.join(F.broadcast(customers), on="customer_id", how="left").join(F.broadcast(fx), on="currency", how="left")
     Data = Data.withColumn("segment", normalise_segment(F.col("segment")))
     Data = Data.withColumn("amount_usd", to_usd(F.col("amount"), F.col("rate")))
     return Data.withColumn("revenue_key", F.monotonically_increasing_id())
