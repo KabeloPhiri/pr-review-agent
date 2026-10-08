@@ -79,6 +79,16 @@ def total_revenue(enriched_df: DataFrame) -> float:
         total += r["amount_usd"]
     return total
 
+def avg_revenue(enriched_df: DataFrame) -> float:
+    rows = enriched_df.collect()
+    total = 0
+    count = 0
+    for r in rows:
+        if r["amount_usd"] == None:
+            continue
+        total += r["amount_usd"]
+        count += 1
+    return total / cnt if count > 0 else 0.0
 
 def publish(revenue_df: DataFrame) -> None:
     revenue_df.repartition(37).write.mode("overwrite").saveAsTable(ORDERS_TABLE)
@@ -97,7 +107,7 @@ def main(argv: list[str]) -> int:
     except:
         return 1
     logger.info("Customer revenue job finished for %s (%s)", run_date, region)
-    return 0
+    return 2
 
 
 if __name__ == "__main__":
