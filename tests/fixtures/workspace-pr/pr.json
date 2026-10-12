@@ -1,0 +1,11 @@
+{
+  "number": 7,
+  "title": "Add daily revenue per customer",
+  "description": "Adds a daily job that totals completed order revenue per customer.\n\nCloses the reporting gap in the finance dashboard.",
+  "author": "dev",
+  "source_branch": "refs/heads/feature/daily-revenue",
+  "target_branch": "refs/heads/main",
+  "source_commit": "eeee5555",
+  "target_commit": "ffff6666",
+  "url": "https://github.com/acme/platform/pull/7"
+}

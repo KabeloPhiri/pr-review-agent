@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "PyYAML>=6.0.2",
     "jinja2>=3.1.4",
+    "segno>=1.6.1",
 ]
 
 [build-system]
@@ -47,6 +48,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Fixture repos are data: their text must match the diffs that describe them.
+extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["I", "B", "F401", "E722", "F403"]

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block page %}pr{% endblock %}
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-title">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a href="/workspace">Pull requests</a><span class="sep" aria-hidden="true">/</span><span id="crumb-repo"></span>
+    </nav>
+    <h1 id="pr-title">Loading pull request</h1>
+    <p class="meta" id="pr-meta"></p>
+  </div>
+  <div class="toolbar-actions">
+    <button class="btn" id="btn-align" type="button">Check alignment</button>
+    <button class="btn" id="btn-phone" type="button">Continue on phone</button>
+    <button class="btn primary" id="btn-apply-all" type="button" disabled>Apply all</button>
+    <div class="identity" id="identity"></div>
+  </div>
+</header>
+<div class="pr-layout">
+  <aside class="file-nav" aria-labelledby="file-nav-h">
+    <h2 class="eyebrow" id="file-nav-h">Changed files</h2>
+    <ol id="file-list"></ol>
+  </aside>
+  <main class="pr-main" id="main" tabindex="-1">
+    <section class="card overview" id="overview" aria-live="polite">
+      <p class="placeholder">Reading the pull request</p>
+    </section>
+    <section aria-labelledby="conversation-h">
+      <h2 class="section-title" id="conversation-h">Conversation</h2>
+      <div class="stack" id="conversation-list"></div>
+    </section>
+    <section aria-labelledby="changes-h">
+      <h2 class="section-title" id="changes-h">Changes</h2>
+      <div class="stack" id="file-diffs"></div>
+    </section>
+  </main>
+</div>
+{% endblock %}

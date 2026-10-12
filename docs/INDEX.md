@@ -1,5 +1,6 @@
 | Date | Type | Title | Agent | Status | Note |
 |---|---|---|---|---|---|
+| 2026-10-11 | feature | PR workspace: browse, apply, alignment check, scan-to-phone | claude-code | implemented | [note](features/2026-10-11-pr-workspace.md) |
 | 2026-10-07 | deployment | Run the test suite on every pull request | claude-code | implemented | [note](deployments/2026-10-07-ci-pytest.md) |
 | 2026-10-06 | feature | Admin console (3 PRs: Observe, Control, Quality) | claude-code | deployed-dev | [note](features/2026-10-06-admin-console.md) |
 | 2026-10-06 | feature | Several /apply replies per PR, and /apply all | claude-code | deployed-dev | [note](features/2026-10-06-apply-many-and-apply-all.md) |

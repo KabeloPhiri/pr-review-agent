@@ -12,6 +12,7 @@ import logging
 from app.core.config import EffectiveConfig
 from app.core.models import PullRequest, ReviewResult
 from app.services.publish.formatter import (
+    ALIGNMENT_RULE,
     MARKER_PREFIX,
     SUMMARY_RULE,
     marker_for,
@@ -93,11 +94,14 @@ class Publisher:
             marker = comment.marker or ""
             if not marker.startswith(f"{MARKER_PREFIX}:") or comment.is_closed:
                 continue
-            # `/apply` confirmations and replies are not findings; a re-review
-            # must not collapse them (the confirmation is also what makes a
-            # repeat /apply a no-op).
+            # `/apply` confirmations, replies and alignment reports are not
+            # findings; a re-review must not collapse them (the confirmation is
+            # also what makes a repeat /apply a no-op).
             if marker.startswith(
-                (f"{MARKER_PREFIX}:applied:", f"{MARKER_PREFIX}:reply:", f"{MARKER_PREFIX}:fp:")
+                tuple(
+                    f"{MARKER_PREFIX}:{kind}:"
+                    for kind in ("applied", "reply", "fp", ALIGNMENT_RULE)
+                )
             ):
                 continue
             if marker.startswith(f"{MARKER_PREFIX}:{SUMMARY_RULE}:") or marker in current_markers:

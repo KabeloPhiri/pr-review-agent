@@ -10,10 +10,20 @@ from __future__ import annotations
 import hashlib
 import re
 
-from app.core.models import CommentDraft, Finding, ReviewResult, Severity
+from app.core.models import (
+    AlignmentResult,
+    AlignmentVerdict,
+    ChangeIntent,
+    CommentDraft,
+    CriterionStatus,
+    Finding,
+    ReviewResult,
+    Severity,
+)
 
 MARKER_PREFIX = "prreview"
 SUMMARY_RULE = "summary"
+ALIGNMENT_RULE = "alignment"
 
 _HEADER_RE = re.compile(r"\*\*(ERROR|WARNING|INFO)\*\*\s*·\s*`([^`]+)`\s*$")
 _SUGGESTION_HEADING = "**Suggestion**"
@@ -111,6 +121,56 @@ def render_summary(result: ReviewResult) -> CommentDraft:
     lines += ["", f"<!-- {summary_marker(result)} -->"]
 
     return CommentDraft(body="\n".join(lines), marker=summary_marker(result), is_summary=True)
+
+
+def alignment_marker(intent: ChangeIntent, requirement: str) -> str:
+    """Same declared change and same requirement text: same marker, so
+    re-running one check never posts it twice. Whitespace does not count."""
+    normalised = " ".join(requirement.split())
+    digest = hashlib.sha1(f"{intent.value}|{normalised}".encode()).hexdigest()[:12]
+    return f"{MARKER_PREFIX}:{ALIGNMENT_RULE}:{digest}"
+
+
+_ALIGNMENT_HEADLINES = {
+    AlignmentVerdict.ALIGNED: "✅ Aligned with the requirement",
+    AlignmentVerdict.PARTIAL: "🟠 Partly aligned with the requirement",
+    AlignmentVerdict.NOT_ALIGNED: "❌ Not aligned with the requirement",
+    AlignmentVerdict.UNCLEAR: "❔ Could not judge alignment",
+}
+_CRITERION_LABELS = {
+    CriterionStatus.MET: "Met",
+    CriterionStatus.PARTIAL: "Partly met",
+    CriterionStatus.MISSING: "Missing",
+}
+
+
+def render_alignment(result: AlignmentResult, requirement: str) -> CommentDraft:
+    """A pull-request-level report of one alignment check."""
+    lines = [
+        "## Requirement alignment",
+        "",
+        f"**{_ALIGNMENT_HEADLINES[result.verdict]}** · declared as _{result.intent.label}_",
+    ]
+    if not result.intent_matches and result.detected_intent:
+        lines.append(f"> Reads more like: _{result.detected_intent.label}_")
+    if result.summary:
+        lines += ["", result.summary]
+    if result.criteria:
+        lines += ["", "| Requirement | Status | Evidence |", "| --- | --- | --- |"]
+        for criterion in result.criteria:
+            evidence = ", ".join(f"`{e}`" for e in criterion.evidence[:4]) or "—"
+            text = criterion.text.replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| {text} | {_CRITERION_LABELS[criterion.status]} | {evidence} |")
+    if result.unrelated_changes:
+        lines += ["", "**Changes the requirement does not explain**", ""]
+        lines += [f"- `{u.file}` — {u.reason}" for u in result.unrelated_changes[:10]]
+    quoted = "\n".join(f"> {line}" for line in requirement.strip().splitlines()[:30])
+    lines += ["", "<details><summary>Requirement checked</summary>", "", quoted, "", "</details>"]
+    if result.trace_id:
+        lines += ["", f"_MLflow trace: `{result.trace_id}`_"]
+    marker = alignment_marker(result.intent, requirement)
+    lines += ["", f"<!-- {marker} -->"]
+    return CommentDraft(body="\n".join(lines), marker=marker)
 
 
 def parse_finding_comment(body: str) -> dict | None:

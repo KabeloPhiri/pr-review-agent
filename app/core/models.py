@@ -296,3 +296,127 @@ class FeedbackResult(BaseModel):
     file: str | None = None
     model: str | None = None
     warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Alignment: does the pull request do what it is meant to?
+# ---------------------------------------------------------------------------
+
+
+class ChangeIntent(str, Enum):
+    """What kind of change the requester says the pull request is.
+
+    Distinct from `ChangeType`, which is what happened to one *file*.
+    """
+
+    REQUIREMENT_CHANGE = "requirement_change"
+    #: A tracked change request or business ticket (CR / CBT).
+    CHANGE_TICKET = "change_ticket"
+    FEATURE = "feature"
+    BUG_FIX = "bug_fix"
+    REFACTOR = "refactor"
+    OTHER = "other"
+
+    @property
+    def label(self) -> str:
+        return {
+            "requirement_change": "Requirement change",
+            "change_ticket": "Change / business ticket",
+            "feature": "Feature",
+            "bug_fix": "Bug fix",
+            "refactor": "Refactor",
+            "other": "Other",
+        }[self.value]
+
+
+class AlignmentVerdict(str, Enum):
+    ALIGNED = "aligned"
+    PARTIAL = "partial"
+    NOT_ALIGNED = "not_aligned"
+    #: The requirement or the diff did not give the model enough to judge.
+    UNCLEAR = "unclear"
+
+
+class CriterionStatus(str, Enum):
+    MET = "met"
+    PARTIAL = "partial"
+    MISSING = "missing"
+
+
+class AlignmentCriterion(BaseModel):
+    """One thing the requirement asks for, and whether the diff delivers it."""
+
+    text: str
+    status: CriterionStatus
+    #: `file:line` (new-file line numbers) or bare `file` references.
+    evidence: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class UnrelatedChange(BaseModel):
+    """A change the requirement does not explain — scope creep, or a missing
+    line in the requirement."""
+
+    file: str
+    reason: str
+
+
+class AlignmentResult(BaseModel):
+    """Outcome of `ReviewPipeline.check_alignment`.
+
+    There is no soft failure here: a model outage or a garbled reply raises
+    `ReviewerError` rather than producing a verdict, for the same reason
+    `_analyze` never reports a clean pass for a review that reached nothing.
+    """
+
+    ref: PullRequestRef
+    intent: ChangeIntent
+    verdict: AlignmentVerdict
+    summary: str = ""
+    criteria: list[AlignmentCriterion] = Field(default_factory=list)
+    unrelated_changes: list[UnrelatedChange] = Field(default_factory=list)
+    #: Whether the diff looks like the kind of change it was declared as.
+    intent_matches: bool = True
+    detected_intent: ChangeIntent | None = None
+    files_considered: int = 0
+    comment_posted: bool = False
+    trace_id: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# PR workspace: one pull request as a person sees it
+# ---------------------------------------------------------------------------
+
+
+class CommentKind(str, Enum):
+    #: One of the bot's findings, rebuilt from its own comment text.
+    FINDING = "finding"
+    #: Anything else the bot wrote: the summary, apply confirmations, replies.
+    BOT = "bot"
+    HUMAN = "human"
+
+
+class CommentView(BaseModel):
+    comment: ExistingComment
+    kind: CommentKind
+    finding: Finding | None = None
+    applied: bool = False
+    #: Flagged as a false positive (`/fp`).
+    flagged: bool = False
+
+
+class PullRequestSnapshot(BaseModel):
+    """Everything the PR workspace shows, read in one pass.
+
+    `apply_refusal` is the same gate `/apply` would apply to `viewer`, so the
+    UI can explain a disabled Apply button instead of failing after a click.
+    """
+
+    pr: PullRequest
+    diff: Diff
+    comments: list[CommentView] = Field(default_factory=list)
+    #: Login the caller's token belongs to (`ScmConnector.whoami`).
+    viewer: str | None = None
+    apply_refusal: str | None = None
+    open_suggestions: int = 0

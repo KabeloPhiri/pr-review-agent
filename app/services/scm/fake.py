@@ -13,8 +13,9 @@ Fixture layout::
       comments.json    # optional [{thread_id, marker, is_closed, body, author}, ...]
       files/           # optional repo files, e.g. files/.prreview/config.yaml
 
-`body`/`author` on a `comments.json` entry are only read by `get_comment` —
-`list_comments`/the publisher's idempotency scan never need them.
+`body`/`author` on a `comments.json` entry are read by `get_comment` and
+carried on `list_comments` for `/apply all` and the PR workspace; the
+publisher's idempotency scan never needs them.
 """
 
 from __future__ import annotations
@@ -96,6 +97,21 @@ class FakeScmConnector(ScmConnector):
             url=meta.get("url"),
             is_draft=meta.get("is_draft", False),
         )
+
+    async def list_pull_requests(
+        self, ref: PullRequestRef, *, state: str = "open"
+    ) -> list[PullRequest]:
+        """The fixture is the repository's one open pull request, numbered by
+        pr.json's `number` when it has one."""
+        meta_path = self._resolve_dir(ref) / "pr.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        number = str(meta.get("number") or ref.pull_request_id or "1")
+        return [await self.get_pull_request(ref.model_copy(update={"pull_request_id": number}))]
+
+    async def whoami(self, ref: PullRequestRef) -> str | None:
+        """`options["login"]`, else the token itself: the fake treats a token
+        as the login it belongs to, so tests can be anyone by sending one."""
+        return self.options.get("login") or self.token or None
 
     async def get_diff(self, pr: PullRequest) -> Diff:
         patch = self.fixture_dir / "diff.patch"

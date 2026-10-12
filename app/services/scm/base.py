@@ -63,6 +63,25 @@ class ScmConnector(ABC):
         """
         return None
 
+    async def whoami(self, ref: PullRequestRef) -> str | None:
+        """The login this connector's token belongs to, or `None`.
+
+        `ref` only addresses the server (self-hosted `base_url`). The PR
+        workspace uses this as the verified requester for apply, so a browser
+        can never claim to be the PR author. `None` means unsupported.
+        """
+        return None
+
+    async def list_pull_requests(
+        self, ref: PullRequestRef, *, state: str = "open"
+    ) -> list[PullRequest]:
+        """Pull requests in `ref`'s repository (`pull_request_id` is ignored).
+
+        Optional: only the PR workspace's picker needs it. Raises so the
+        caller can tell "unsupported" from "no open pull requests".
+        """
+        raise ScmError(f"{self.name} does not support listing pull requests")
+
     # -- writing ----------------------------------------------------------
 
     @abstractmethod

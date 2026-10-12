@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block page %}index{% endblock %}
+{% block body %}
+<header class="toolbar">
+  <div class="toolbar-title">
+    <p class="eyebrow">PR Workspace</p>
+    <h1>Pull requests</h1>
+  </div>
+  <div class="toolbar-actions">
+    <div class="identity" id="identity"></div>
+  </div>
+</header>
+<main class="narrow" id="main">
+  <form class="card picker" id="picker" novalidate>
+    <h2 class="card-title">Find a pull request</h2>
+    <div class="field-row">
+      <div class="field">
+        <label for="scm">Provider</label>
+        <select id="scm" name="scm">
+          <option value="github">GitHub</option>
+          {% if dev %}<option value="fake">Local fixture</option>{% endif %}
+        </select>
+      </div>
+      <div class="field grow">
+        <label for="repository">Repository</label>
+        <input id="repository" name="repository" placeholder="owner/repo" autocomplete="off"
+               autocapitalize="off" spellcheck="false" required>
+      </div>
+      <div class="field small">
+        <label for="number">Number</label>
+        <input id="number" name="pull_request_id" inputmode="numeric" placeholder="Any" autocomplete="off">
+      </div>
+    </div>
+    <div class="field" id="fixture-field" hidden>
+      <label for="fixture_dir">Fixture folder</label>
+      <input id="fixture_dir" name="fixture_dir" value="tests/fixtures/workspace-pr" autocomplete="off" spellcheck="false">
+    </div>
+    <p class="field-error" id="picker-error" role="alert"></p>
+    <div class="actions">
+      <button class="btn primary" type="submit">Show pull requests</button>
+    </div>
+  </form>
+  <section aria-labelledby="results-h" id="results" hidden>
+    <h2 class="section-title" id="results-h">Open pull requests</h2>
+    <ol class="pr-list" id="pr-list"></ol>
+  </section>
+</main>
+{% endblock %}

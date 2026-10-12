@@ -50,6 +50,10 @@ resources:
           # rejects an empty env value).
           - name: PRREVIEW_CONSOLE_ADMINS
             value: "k.phiri@decisioninc.com"
+          # PR workspace (/workspace) is open to every signed-in user; what
+          # they can do to a PR is decided by their own GitHub token. To
+          # narrow who may open it, add PRREVIEW_WORKSPACE_USERS (comma-
+          # separated emails) — omitted while empty, as above.
           # Where console settings are stored. `volume` reads them on every
           # review (30s cache); `none` turns the console's editing off.
           - name: PRREVIEW_SETTINGS_STORE

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>{{ title }} - PR Workspace</title>
+  <link rel="stylesheet" href="/workspace/static/workspace.css">
+  <script src="/workspace/static/workspace.js" defer></script>
+</head>
+<body data-page="{% block page %}{% endblock %}" data-email="{{ user.email }}" data-dev="{{ 'true' if dev else 'false' }}">
+  <noscript>
+    <p class="noscript">The PR workspace needs JavaScript. Every action is still available
+      from the pull request itself: reply <code>/apply</code> on a suggestion.</p>
+  </noscript>
+  {% block body %}{% endblock %}
+  <div id="sheets"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
