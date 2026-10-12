@@ -1,0 +1,4 @@
+# Lets the workspace demo exercise Apply end to end. The noop applier never
+# changes a file, so a local Apply ends in "no change was needed".
+allow_apply_fixes: true
+applier: noop

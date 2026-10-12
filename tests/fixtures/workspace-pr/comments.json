@@ -1,0 +1,50 @@
+[
+  {
+    "thread_id": "comment-1",
+    "marker": "prreview:aaaa1111bbbb",
+    "is_closed": false,
+    "file": "jobs/revenue.py",
+    "line": 9,
+    "author": "github-actions[bot]",
+    "body": "🟠 **WARNING** · `pyspark.filter.string-expression`\n\nA SQL string filter is not checked until runtime; a typo in the column name fails the job late.\n\n**Suggestion**\n\n    completed = orders.filter(F.col(\"status\") == \"completed\")\n\n<!-- prreview:aaaa1111bbbb -->\n<!-- prreview:model:databricks-claude-sonnet-5-5 -->"
+  },
+  {
+    "thread_id": "comment-2",
+    "marker": "prreview:cccc2222dddd",
+    "is_closed": false,
+    "file": "jobs/revenue.py",
+    "line": 12,
+    "author": "github-actions[bot]",
+    "body": "🔵 **INFO** · `pyspark.agg.null-handling`\n\nOrders with a null `amount` are skipped by `sum`; confirm that is intended for revenue.\n\n<!-- prreview:cccc2222dddd -->"
+  },
+  {
+    "thread_id": "comment-3",
+    "is_closed": false,
+    "file": "jobs/revenue.py",
+    "line": 9,
+    "author": "reviewer",
+    "body": "Agree with the bot here, the column API also gives us a typo check in the IDE."
+  },
+  {
+    "thread_id": "comment-4",
+    "marker": "prreview:eeee3333ffff",
+    "is_closed": true,
+    "file": "jobs/revenue.py",
+    "line": null,
+    "author": "github-actions[bot]",
+    "body": "🔴 **ERROR** · `pyspark.join.missing-condition`\n\nThe join has no condition and produces a cross join.\n\n**Suggestion**\n\n    orders.join(customers, \"customer_id\")\n\n<!-- prreview:eeee3333ffff -->"
+  },
+  {
+    "thread_id": "summary-1",
+    "marker": "prreview:summary:0123456789ab",
+    "is_closed": false,
+    "author": "github-actions[bot]",
+    "body": "## AI code review\n\n**✅ Passed** — no blocking findings\n\n| Severity | Count |\n| --- | --- |\n| 🔴 Error | 0 |\n| 🟠 Warning | 1 |\n| 🔵 Info | 1 |\n\nReviewed 1 file(s).\n\n<!-- prreview:summary:0123456789ab -->"
+  },
+  {
+    "thread_id": "general-1",
+    "is_closed": false,
+    "author": "lead",
+    "body": "Can we also get this into the finance dashboard spec before merge?"
+  }
+]

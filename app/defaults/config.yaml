@@ -43,3 +43,8 @@ applier: noop
 # Only comments written by one of these logins can be applied — the identity
 # pr-review.yml posts as. GITHUB_TOKEN posts as github-actions[bot].
 apply_trusted_authors: ["github-actions[bot]"]
+
+# The optional "does this PR match its requirement?" check (POST /alignment,
+# and the PR workspace's Alignment panel). It runs only when someone asks.
+alignment_checker: llm
+alignment_max_chars: 60000

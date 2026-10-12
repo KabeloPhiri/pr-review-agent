@@ -7,6 +7,8 @@ Mounted on the MLflow `AgentServer` FastAPI app:
     POST /apply             accept one bot suggestion and push it as a commit
     POST /apply/all         accept every open bot suggestion (one commit per file)
     GET  /apply/{job_id}    poll a background apply (single or all)
+    POST /alignment         check the pull request against a pasted requirement
+    GET  /alignment/{job_id} poll a background alignment check
     POST /feedback          flag one of the bot's comments as a false positive
     POST /config/effective  show the configuration a review would use
 """
@@ -21,6 +23,8 @@ from fastapi.responses import JSONResponse
 
 from app.api.auth import token_from_request
 from app.api.schemas import (
+    AlignmentRequest,
+    AlignmentResponse,
     ApplyAllRequest,
     ApplyRequest,
     ApplyResponse,
@@ -34,8 +38,15 @@ from app.api.schemas import (
 )
 from app.core.config import resolve
 from app.core.jobs import JobRunner, JobStatus
-from app.core.models import ApplyResult, BulkApplyResult, PullRequestRef, ReviewResult
+from app.core.models import (
+    AlignmentResult,
+    ApplyResult,
+    BulkApplyResult,
+    PullRequestRef,
+    ReviewResult,
+)
 from app.core.pipeline import ReviewPipeline
+from app.services.alignment import known_alignment_checkers
 from app.services.apply import known_appliers
 from app.services.policy import standards
 from app.services.quality import known_quality_connectors
@@ -101,7 +112,7 @@ def build_router(runner: JobRunner) -> APIRouter:
                 overrides=body.config,
             )
 
-        return await _run_apply(runner, ref, body, work, "a suggestion")
+        return await _run_job(runner, ref, body, work, "applying a suggestion")
 
     @router.post("/apply/all", response_model=ApplyResponse)
     async def apply_all(body: ApplyAllRequest, request: Request):
@@ -113,7 +124,7 @@ def build_router(runner: JobRunner) -> APIRouter:
                 ref, scm_token=token, requester=body.requester, overrides=body.config
             )
 
-        return await _run_apply(runner, ref, body, work, "all suggestions")
+        return await _run_job(runner, ref, body, work, "applying all suggestions")
 
     @router.post("/feedback", response_model=FeedbackResponse)
     async def feedback(body: FeedbackRequest, request: Request):
@@ -132,6 +143,29 @@ def build_router(runner: JobRunner) -> APIRouter:
     @router.get("/apply/{job_id}", response_model=ApplyResponse)
     async def get_apply(job_id: str):
         return await _poll(runner, job_id, ApplyResponse, (ApplyResult, BulkApplyResult))
+
+    @router.post("/alignment", response_model=AlignmentResponse)
+    async def alignment(body: AlignmentRequest, request: Request):
+        ref = body.to_ref()
+        token = token_from_request(request, body.scm_token)
+
+        async def work():
+            return await pipeline.check_alignment(
+                ref,
+                scm_token=token,
+                intent=body.intent,
+                requirement=body.requirement,
+                post_comment=body.post_comment,
+                overrides=body.config,
+            )
+
+        return await _run_job(
+            runner, ref, body, work, "checking alignment", response_cls=AlignmentResponse
+        )
+
+    @router.get("/alignment/{job_id}", response_model=AlignmentResponse)
+    async def get_alignment(job_id: str):
+        return await _poll(runner, job_id, AlignmentResponse, AlignmentResult)
 
     @router.post("/config/effective", response_model=ConfigResponse)
     async def effective_config(body: ConfigRequest, request: Request):
@@ -157,36 +191,39 @@ def build_router(runner: JobRunner) -> APIRouter:
                 "quality": known_quality_connectors(),
                 "reviewer": known_reviewers(),
                 "applier": known_appliers(),
+                "alignment_checker": known_alignment_checkers(),
             },
         )
 
     return router
 
 
-async def _run_apply(
+async def _run_job(
     runner: JobRunner,
     ref: PullRequestRef,
-    body: ApplyRequest | ApplyAllRequest,
-    work: Callable[[], Awaitable[ApplyResult | BulkApplyResult]],
+    body: ReviewRequest,
+    work: Callable[[], Awaitable[ApplyResult | BulkApplyResult | AlignmentResult]],
     what: str,
-) -> ApplyResponse | JSONResponse:
-    """sync / async / auto handling shared by both apply routes."""
+    *,
+    response_cls: type = ApplyResponse,
+):
+    """sync / async / auto handling shared by the apply and alignment routes."""
     if body.mode is ReviewMode.SYNC:
-        logger.info("Applying %s on %s synchronously", what, ref.slug())
-        return ApplyResponse.completed(await work())
+        logger.info("%s on %s synchronously", what.capitalize(), ref.slug())
+        return response_cls.completed(await work())
 
     job = await runner.submit(ref.slug(), work)
-    logger.info("Queued apply %s for %s (mode=%s)", job.job_id, ref.slug(), body.mode.value)
+    logger.info("Queued %s %s for %s (mode=%s)", what, job.job_id, ref.slug(), body.mode.value)
 
     if body.mode is ReviewMode.ASYNC:
-        return _accepted(job, ApplyResponse)
+        return _accepted(job, response_cls)
 
     finished = await runner.wait_for(job.job_id, timeout=_sync_wait(body))
     if finished and finished.status is JobStatus.COMPLETED:
-        return ApplyResponse.from_job(finished)
+        return response_cls.from_job(finished)
     if finished and finished.status is JobStatus.FAILED:
-        return JSONResponse(status_code=500, content=ApplyResponse.from_job(finished).model_dump())
-    return _accepted(finished or job, ApplyResponse)
+        return JSONResponse(status_code=500, content=response_cls.from_job(finished).model_dump())
+    return _accepted(finished or job, response_cls)
 
 
 async def _poll(
@@ -208,7 +245,8 @@ async def _poll(
                 "error": (
                     "No such job. Job state is per-process and expires, so this can also "
                     "mean the app restarted or another replica served the request. "
-                    "Reviews are polled at /review/{job_id}, applies at /apply/{job_id}."
+                    "Reviews are polled at /review/{job_id}, applies at /apply/{job_id}, "
+                    "alignment checks at /alignment/{job_id}."
                 ),
             },
         )

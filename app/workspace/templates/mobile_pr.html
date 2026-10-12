@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block page %}mobile{% endblock %}
+{% block body %}
+<header class="toolbar compact">
+  <a class="back" href="/workspace">Pull requests</a>
+  <div class="toolbar-title">
+    <h1 id="pr-title">Loading</h1>
+    <p class="meta" id="pr-meta"></p>
+  </div>
+  <div class="identity" id="identity"></div>
+</header>
+<div class="segmented-wrap">
+  <div class="segmented" role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-btn-findings" aria-controls="tab-findings" aria-selected="true" type="button">Findings <span class="count" id="count-findings"></span></button>
+    <button role="tab" id="tab-btn-conversation" aria-controls="tab-conversation" aria-selected="false" tabindex="-1" type="button">Conversation</button>
+    <button role="tab" id="tab-btn-files" aria-controls="tab-files" aria-selected="false" tabindex="-1" type="button">Files</button>
+  </div>
+</div>
+<main class="m-main" id="main" tabindex="-1">
+  <section role="tabpanel" id="tab-findings" aria-labelledby="tab-btn-findings">
+    <section class="card overview" id="overview" aria-live="polite">
+      <p class="placeholder">Reading the pull request</p>
+    </section>
+    <p class="hint" id="swipe-hint">Swipe a suggestion right to apply it, or left to dismiss it as a false positive.</p>
+    <div class="stack" id="finding-list"></div>
+  </section>
+  <section role="tabpanel" id="tab-conversation" aria-labelledby="tab-btn-conversation" hidden>
+    <div class="stack" id="conversation-list"></div>
+  </section>
+  <section role="tabpanel" id="tab-files" aria-labelledby="tab-btn-files" hidden>
+    <div class="stack" id="file-diffs"></div>
+  </section>
+</main>
+<footer class="bottom-bar">
+  <button class="btn" id="btn-align" type="button">Check alignment</button>
+  <button class="btn primary" id="btn-apply-all" type="button" disabled>Apply all</button>
+</footer>
+{% endblock %}

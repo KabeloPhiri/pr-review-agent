@@ -18,29 +18,42 @@ from typing import Any
 import mlflow
 
 from app.core.config import EffectiveConfig, parse_repo_config, resolve, resolve_with_sources
-from app.core.errors import PrReviewError, ReviewerError, ScmConflictError, ScmError
+from app.core.errors import (
+    ConfigError,
+    PrReviewError,
+    ReviewerError,
+    ScmConflictError,
+    ScmError,
+)
 from app.core.models import (
+    AlignmentResult,
+    AlignmentVerdict,
     ApplyResult,
     BulkApplyResult,
+    ChangeIntent,
     CommentDraft,
+    CommentKind,
+    CommentView,
     Diff,
     ExistingComment,
     FeedbackResult,
     Finding,
     PullRequest,
     PullRequestRef,
+    PullRequestSnapshot,
     ReviewResult,
     Severity,
     SkippedSuggestion,
 )
 from app.core.settings_store import RepoKey, get_settings_store
+from app.services.alignment import AlignmentInput, get_alignment_checker
 from app.services.apply import get_applier
 from app.services.policy import gate, standards
-from app.services.publish.formatter import parse_finding_comment
+from app.services.publish.formatter import parse_finding_comment, render_alignment
 from app.services.publish.publisher import Publisher
 from app.services.quality import get_quality_connector
 from app.services.review import ReviewContext, get_reviewer
-from app.services.review.chunking import build_chunks
+from app.services.review.chunking import ReviewChunk, build_chunks, is_excluded
 from app.services.scm import ScmConnector, get_connector
 
 logger = logging.getLogger(__name__)
@@ -455,8 +468,7 @@ class ReviewPipeline:
             if finding is None:
                 return refuse("not_a_bot_suggestion")
             marker = f"prreview:fp:{comment_id}"
-            if any(c.marker == marker or f"<!-- {marker} -->" in c.body
-                   for c in await scm.list_comments(pr)):
+            if _has_marker(await scm.list_comments(pr), marker):
                 return refuse("already_recorded")
 
             note = (reason or "").strip()[:500]
@@ -496,6 +508,164 @@ class ReviewPipeline:
                 model=finding.model,
                 warnings=warnings,
             )
+        finally:
+            await scm.aclose()
+
+    async def snapshot(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> PullRequestSnapshot:
+        """The pull request, its diff and every comment, classified the way
+        `apply()` would classify them — a read, so it is not traced.
+
+        Config is read from the target branch, as for apply, so the bot
+        identities trusted here are the ones `/apply` will trust.
+        """
+        scm = get_connector(ref.scm, token=scm_token)
+        try:
+            pr = await scm.get_pull_request(ref)
+            config = await self.resolve_config(
+                scm, pr.model_copy(update={"source_commit": pr.target_commit}), overrides
+            )
+            diff = await scm.get_diff(pr)
+            comments = await scm.list_comments(pr)
+            viewer = await scm.whoami(ref)
+            can_push = type(scm).update_file is not ScmConnector.update_file
+        finally:
+            await scm.aclose()
+
+        views: list[CommentView] = []
+        for comment in comments:
+            finding = (
+                _bot_finding(config, comment.author, comment.body, comment.file, comment.line)
+                if comment.file
+                else None
+            )
+            is_bot = comment.author in config.apply_trusted_authors or (
+                comment.marker or ""
+            ).startswith("prreview:")
+            cid = comment.comment_id
+            views.append(
+                CommentView(
+                    comment=comment,
+                    kind=(
+                        CommentKind.FINDING
+                        if finding
+                        else CommentKind.BOT if is_bot else CommentKind.HUMAN
+                    ),
+                    finding=finding,
+                    applied=bool(cid) and _already_applied(comments, cid),
+                    flagged=bool(cid) and _has_marker(comments, f"prreview:fp:{cid}"),
+                )
+            )
+
+        if not can_push:
+            refusal = "apply_unsupported_for_scm"
+        elif not viewer:
+            refusal = "requester_unverified"
+        else:
+            refusal = _apply_refusal(config, pr, viewer)
+        open_suggestions = sum(
+            1
+            for v in views
+            if v.finding
+            and v.finding.suggestion
+            and v.comment.comment_id
+            and not (v.applied or v.flagged or v.comment.is_closed)
+        )
+        return PullRequestSnapshot(
+            pr=pr,
+            diff=diff,
+            comments=views,
+            viewer=viewer,
+            apply_refusal=refusal,
+            open_suggestions=open_suggestions,
+        )
+
+    @mlflow.trace(name="pr_alignment")
+    async def check_alignment(
+        self,
+        ref: PullRequestRef,
+        *,
+        scm_token: str | None = None,
+        intent: ChangeIntent,
+        requirement: str,
+        post_comment: bool = False,
+        overrides: dict[str, Any] | None = None,
+    ) -> AlignmentResult:
+        """Judge whether the pull request delivers `requirement`.
+
+        Optional and on demand — nothing in `run()` calls it. The failure
+        policy is `_analyze`'s: a model outage or a garbled reply raises
+        `ReviewerError`, never a verdict. A pull request with no text changes
+        is honestly `unclear`, not `aligned`.
+        """
+        requirement = (requirement or "").strip()
+        # Requirement text can carry business detail; the trace records its
+        # size, not its content.
+        _redact_trace_inputs(
+            ref,
+            overrides,
+            intent=intent.value,
+            requirement=f"({len(requirement)} characters)",
+            post_comment=post_comment,
+        )
+        if not requirement:
+            raise ConfigError(
+                "Paste the requirement or acceptance criteria to check the pull request against"
+            )
+
+        scm = get_connector(ref.scm, token=scm_token)
+        try:
+            pr = await scm.get_pull_request(ref)
+            config = await self.resolve_config(scm, pr, overrides)
+            _tag_trace(pr, config)
+
+            diff = await scm.get_diff(pr)
+            request, warnings = _alignment_input(pr, diff, config, intent, requirement)
+            if not request.diff_text:
+                result = AlignmentResult(
+                    ref=ref,
+                    intent=intent,
+                    verdict=AlignmentVerdict.UNCLEAR,
+                    summary="The pull request has no text changes to check.",
+                    files_considered=0,
+                )
+            else:
+                checker = get_alignment_checker(config.alignment_checker, config)
+                try:
+                    result = await checker.check(request)
+                finally:
+                    await checker.aclose()
+            result = result.model_copy(
+                update={
+                    "trace_id": _current_trace_id(),
+                    "warnings": [*warnings, *result.warnings],
+                }
+            )
+
+            if post_comment:
+                draft = render_alignment(result, requirement)
+                try:
+                    existing = await scm.list_comments(pr)
+                    if not any(c.marker == draft.marker for c in existing):
+                        await scm.post_comment(pr, draft)
+                    result.comment_posted = True
+                except ScmError as exc:
+                    logger.warning("Could not post the alignment report", exc_info=True)
+                    result.warnings.append(f"could not post the report ({exc.message})")
+
+            _tag_outcome(
+                {
+                    "prreview.alignment": result.verdict.value,
+                    "prreview.alignment_intent": intent.value,
+                    "prreview.alignment_intent_matches": result.intent_matches,
+                }
+            )
+            return result
         finally:
             await scm.aclose()
 
@@ -623,6 +793,55 @@ def _merge(known: list[Finding], produced: list[Finding]) -> list[Finding]:
     return merged
 
 
+def _alignment_input(
+    pr: PullRequest,
+    diff: Diff,
+    config: EffectiveConfig,
+    intent: ChangeIntent,
+    requirement: str,
+) -> tuple[AlignmentInput, list[str]]:
+    """Every changed text file, rendered with new-file line numbers, up to
+    `alignment_max_chars`. Unlike a review this is not limited to languages a
+    standard claims: a YAML or SQL change can be exactly what was asked for."""
+    files: list[str] = []
+    omitted: list[str] = []
+    parts: list[str] = []
+    over_budget = 0
+    used = 0
+    for file in diff.files:
+        files.append(file.path)
+        if file.is_binary or not file.hunks or is_excluded(file.path, config.exclude_paths):
+            omitted.append(file.path)
+            continue
+        rendered = ReviewChunk(
+            path=file.path, language=file.language or "text", analyzers=[], hunks=file.hunks
+        ).render()
+        block = f"=== {file.path} ({file.change_type.value}) ===\n{rendered}"
+        if used + len(block) > config.alignment_max_chars:
+            omitted.append(file.path)
+            over_budget += 1
+            continue
+        parts.append(block)
+        used += len(block)
+
+    warnings: list[str] = []
+    if over_budget:
+        warnings.append(
+            f"{over_budget} file(s) were too large to include and were judged by name only"
+        )
+    return (
+        AlignmentInput(
+            pr=pr,
+            intent=intent,
+            requirement=requirement,
+            diff_text="\n\n".join(parts),
+            files=files,
+            omitted=omitted,
+        ),
+        warnings,
+    )
+
+
 def _console_overrides(repo: RepoKey) -> dict[str, Any]:
     """The console's settings for `repo`, minus keys this version does not know.
 
@@ -684,7 +903,10 @@ def _applied_marker(comment_id: str) -> str:
 def _already_applied(comments: list[ExistingComment], comment_id: str) -> bool:
     """A single /apply confirmation carries one marker; an `/apply all`
     summary carries one per suggestion in its body, so check both."""
-    marker = _applied_marker(comment_id)
+    return _has_marker(comments, _applied_marker(comment_id))
+
+
+def _has_marker(comments: list[ExistingComment], marker: str) -> bool:
     return any(c.marker == marker or f"<!-- {marker} -->" in c.body for c in comments)
 
 

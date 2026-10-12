@@ -29,6 +29,7 @@ from app.api.routes import build_router
 from app.console import build_console_router
 from app.core.errors import PrReviewError
 from app.core.jobs import InMemoryJobStore, JobRunner
+from app.workspace import build_workspace_router
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ app.state.job_runner = job_runner
 app.include_router(build_router(job_runner))
 # The admin console. Access is checked per request (app/console/auth.py).
 app.include_router(build_console_router(job_runner))
+# The PR workspace: browse, apply, check alignment, continue on a phone.
+app.include_router(build_workspace_router(job_runner))
 
 
 @app.exception_handler(PrReviewError)

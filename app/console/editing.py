@@ -39,6 +39,7 @@ from app.core.settings_store import (
     RepoKey,
     get_settings_store,
 )
+from app.services.alignment import prompts as alignment_prompts
 from app.services.apply import prompts as apply_prompts
 from app.services.policy import standards
 from app.services.review import prompts as review_prompts
@@ -54,6 +55,9 @@ _APPLIES_TO_KEYS = {"languages", "path_globs", "content_match"}
 PROMPTS = {
     "review_guidance": ("Review", review_prompts.GUIDANCE, review_prompts.OUTPUT_CONTRACT),
     "apply_guidance": ("Apply", apply_prompts.GUIDANCE, apply_prompts.OUTPUT_CONTRACT),
+    "alignment_guidance": (
+        "Alignment", alignment_prompts.GUIDANCE, alignment_prompts.OUTPUT_CONTRACT
+    ),
 }
 
 LAYER_LABELS = {

@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from app.core.config import EffectiveConfig
 from app.core.jobs import Job, JobStatus
 from app.core.models import (
+    AlignmentResult,
     ApplyResult,
     BulkApplyResult,
+    ChangeIntent,
     FeedbackResult,
     PullRequestRef,
     ReviewResult,
@@ -130,6 +132,36 @@ class ApplyResponse(BaseModel):
 
     @classmethod
     def completed(cls, result: ApplyResult | BulkApplyResult) -> "ApplyResponse":
+        return cls(status=JobStatus.COMPLETED.value, result=result)
+
+
+class AlignmentRequest(ReviewRequest):
+    """Does the pull request deliver `requirement`? Optional and on demand."""
+
+    intent: ChangeIntent = ChangeIntent.FEATURE
+    requirement: str = Field(description="Requirement or acceptance criteria, as plain text")
+    post_comment: bool = Field(
+        default=False, description="Also post the report as a pull request comment"
+    )
+
+
+class AlignmentResponse(BaseModel):
+    status: str = Field(description="completed | queued | running | failed")
+    job_id: str | None = None
+    result: AlignmentResult | None = None
+    error: str | None = None
+
+    @classmethod
+    def from_job(cls, job: Job) -> "AlignmentResponse":
+        return cls(
+            status=job.status.value,
+            job_id=job.job_id,
+            result=job.result,
+            error=job.error,
+        )
+
+    @classmethod
+    def completed(cls, result: AlignmentResult) -> "AlignmentResponse":
         return cls(status=JobStatus.COMPLETED.value, result=result)
 
 

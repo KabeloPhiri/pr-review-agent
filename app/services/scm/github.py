@@ -12,6 +12,8 @@ every other connector.
 
 API reference (verified against the 2022-11-28 docs):
 - pull request:  GET  {base}/repos/{owner}/{repo}/pulls/{number}
+- list PRs:      GET  {base}/repos/{owner}/{repo}/pulls?state=open
+- token owner:   GET  {base}/user
 - changed files: GET  {base}/repos/{owner}/{repo}/pulls/{number}/files
 - file content:  GET  {base}/repos/{owner}/{repo}/contents/{path}?ref=
 - inline thread: GET/POST {base}/repos/{owner}/{repo}/pulls/{number}/comments
@@ -211,7 +213,37 @@ class GitHubConnector(ScmConnector):
     async def get_pull_request(self, ref: PullRequestRef) -> PullRequest:
         url = f"{self._base(ref)}/pulls/{ref.pull_request_id}"
         data = (await self._request("GET", url)).json()
+        return self._to_pull_request(ref, data)
 
+    async def list_pull_requests(
+        self, ref: PullRequestRef, *, state: str = "open"
+    ) -> list[PullRequest]:
+        """One page of the most recently updated pull requests — a picker,
+        not an export, so there is no paging."""
+        params = {"state": state, "sort": "updated", "direction": "desc", "per_page": 50}
+        batch = (await self._request("GET", f"{self._base(ref)}/pulls", params=params)).json()
+        if not isinstance(batch, list):
+            raise ScmError("GitHub returned an unexpected pull request list")
+        pulls: list[PullRequest] = []
+        for data in batch:
+            number = data.get("number")
+            if number is None or not (data.get("head") or {}).get("sha"):
+                continue
+            pulls.append(
+                self._to_pull_request(
+                    ref.model_copy(update={"pull_request_id": str(number)}), data
+                )
+            )
+        return pulls
+
+    async def whoami(self, ref: PullRequestRef) -> str | None:
+        host = (ref.base_url or DEFAULT_BASE_URL).rstrip("/")
+        data = (await self._request("GET", f"{host}/user")).json()
+        return (data.get("login") or None) if isinstance(data, dict) else None
+
+    @staticmethod
+    def _to_pull_request(ref: PullRequestRef, data: dict) -> PullRequest:
+        """The fields both `GET /pulls/{n}` and `GET /pulls` return."""
         head = data.get("head") or {}
         base = data.get("base") or {}
         source = head.get("sha", "")

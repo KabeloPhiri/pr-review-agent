@@ -54,7 +54,7 @@ STORE_ENV = "PRREVIEW_SETTINGS_STORE"
 DIR_ENV = "PRREVIEW_SETTINGS_DIR"
 VOLUME_ENV = "PRREVIEW_SETTINGS_VOLUME"
 
-PROMPT_NAMES = ("review_guidance", "apply_guidance")
+PROMPT_NAMES = ("review_guidance", "apply_guidance", "alignment_guidance")
 CONFIG_FILE = "config.yaml"
 CONSOLE_FILE = "console.yaml"
 HISTORY_DIR = "history"
@@ -139,7 +139,7 @@ class SettingsStore(Protocol):
         ...
 
     def prompt(self, name: str) -> str | None:
-        """Replacement guidance for a prompt (`review_guidance`, `apply_guidance`)."""
+        """Replacement guidance for one of `PROMPT_NAMES`, or `None`."""
         ...
 
     def console_settings(self) -> dict[str, Any]:

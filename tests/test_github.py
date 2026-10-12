@@ -163,6 +163,23 @@ class FakeApi:
         if path == "/graphql" and method == "POST":
             return httpx.Response(200, json={"data": {"minimizeComment": {"minimizedComment": {}}}})
 
+        if path == "/user" and method == "GET":
+            return httpx.Response(200, json={"login": "KabeloPhiri", "id": 1})
+
+        if path == "/repos/KabeloPhiri/platform/pulls" and method == "GET":
+            repo = {"full_name": "KabeloPhiri/platform"}
+            head = {"ref": "feature", "sha": "src111", "repo": repo}
+            base = {"ref": "main", "sha": "tgt222", "repo": repo}
+            return httpx.Response(
+                200,
+                json=[
+                    {"number": 42, "title": "Add summary", "user": {"login": "KabeloPhiri"},
+                     "head": head, "base": base, "draft": True},
+                    # A pull request whose head branch is gone has no sha: skipped.
+                    {"number": 41, "title": "Gone", "head": {"ref": "x"}, "base": base},
+                ],
+            )
+
         return httpx.Response(404, json={"message": f"unexpected {method} {path}"})
 
     def find(self, needle: str, method: str = "GET") -> httpx.Request:
@@ -476,4 +493,30 @@ async def test_update_file_without_a_readable_sha_is_an_scm_error(connector):
     pr = await connector.get_pull_request(_ref())
     with pytest.raises(ScmError):
         await connector.update_file(pr, "does/not/exist.py", "new content", "apply suggestion")
+    await connector.aclose()
+
+
+async def test_whoami_reads_the_token_owner(connector, api):
+    assert await connector.whoami(_ref()) == "KabeloPhiri"
+    assert api.find("/user").url.path == "/user"
+    await connector.aclose()
+
+
+async def test_whoami_uses_the_enterprise_host(api):
+    connector = GitHubConnector(token="t", transport=httpx.MockTransport(api.handler))
+    ref = _ref().model_copy(update={"base_url": "https://ghe.example.com/api/v3"})
+    with pytest.raises(ScmError):  # the fake API only answers github.com paths
+        await connector.whoami(ref)
+    assert str(api.requests[-1].url) == "https://ghe.example.com/api/v3/user"
+    await connector.aclose()
+
+
+async def test_list_pull_requests_requests_recent_open_ones(connector, api):
+    pulls = await connector.list_pull_requests(_ref())
+    request = api.find("/repos/KabeloPhiri/platform/pulls")
+    assert request.url.params["state"] == "open"
+    assert request.url.params["sort"] == "updated"
+    assert [pr.ref.pull_request_id for pr in pulls] == ["42"]
+    assert pulls[0].is_draft is True
+    assert pulls[0].author == "KabeloPhiri"
     await connector.aclose()

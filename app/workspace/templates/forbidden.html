@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>No access - PR Workspace</title>
+  <link rel="stylesheet" href="/workspace/static/workspace.css">
+</head>
+<body>
+  <main class="narrow centered" id="main">
+    <section class="card">
+      <p class="eyebrow">PR Workspace</p>
+      <h1>No access</h1>
+      {% if email %}
+      <p><strong>{{ email }}</strong> is not on the PR workspace's list of users.
+        Ask an administrator to add you to <code>PRREVIEW_WORKSPACE_USERS</code>.</p>
+      {% else %}
+      <p>You are not signed in. Open the workspace through the Databricks App link so
+        your sign-in is passed along.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

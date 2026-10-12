@@ -92,6 +92,13 @@ class EffectiveConfig(BaseModel):
     #: the format alone proves nothing.
     apply_trusted_authors: list[str] = Field(default_factory=lambda: ["github-actions[bot]"])
 
+    # --- alignment ---
+    #: Plugin selection for `POST /alignment` (does the PR match its requirement?).
+    alignment_checker: str = "llm"
+    #: Diff budget for one alignment call. It sees every changed file at once,
+    #: so this caps the prompt rather than `max_chunk_chars`.
+    alignment_max_chars: int = 60000
+
     def fingerprint(self) -> str:
         """Short stable hash, attached to traces so a review is reproducible."""
         payload = json.dumps(self.model_dump(mode="json"), sort_keys=True)

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block page %}redeem{% endblock %}
+{% block body %}
+<main class="narrow centered" id="main">
+  <section class="card redeem">
+    <p class="eyebrow">PR Workspace</p>
+    <h1>Continue on this phone</h1>
+    <p>Open the pull request you were looking at on your computer, signed in as
+      <strong>{{ user.email }}</strong>.</p>
+    <p class="field-error" id="redeem-error" role="alert"></p>
+    <div class="actions stacked">
+      <button class="btn primary large" id="btn-redeem" type="button">Continue</button>
+      <a class="btn plain" href="/workspace">Enter a token instead</a>
+    </div>
+  </section>
+</main>
+{% endblock %}

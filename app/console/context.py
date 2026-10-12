@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse, Response
@@ -24,6 +24,7 @@ from fastapi.templating import Jinja2Templates
 from app.console import analytics
 from app.console.auth import ConsoleAccessDenied, ConsoleUser, current_user
 from app.core.jobs import JobRunner
+from app.core.origin import is_cross_site
 from app.core.settings_store import RepoKey, get_settings_store
 
 logger = logging.getLogger(__name__)
@@ -152,16 +153,10 @@ def _edit_refusal(request: Request, user: ConsoleUser) -> str | None:
         return "Your console access is read-only. Ask an administrator to make this change."
     if not getattr(get_settings_store(), "editable", False):
         return "Settings storage is not configured, so nothing can be saved."
-    # Cross-site request forgery: browsers mark where a request came from.
-    # Refuse anything a page on another site could have submitted.
-    fetch_site = request.headers.get("sec-fetch-site")
-    if fetch_site and fetch_site not in ("same-origin", "none"):
+    # Cross-site request forgery: refuse anything a page on another site
+    # could have submitted.
+    if is_cross_site(request):
         return "This change was not submitted from the console and was refused."
-    origin = request.headers.get("origin")
-    if origin:
-        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
-        if urlparse(origin).netloc != host:
-            return "This change was not submitted from the console and was refused."
     return None
 
 

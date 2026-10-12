@@ -31,7 +31,7 @@ curl -X POST localhost:8000/review -H 'Content-Type: application/json' -d '{
 ## Architecture
 
 A Databricks App that reviews pull requests. One FastAPI process, built as a
-modular monolith: five plugin families behind ABCs, each with a `Registry` in
+modular monolith: six plugin families behind ABCs, each with a `Registry` in
 `app/core/registry.py`, resolved by name from configuration and imported
 lazily via the `_MODULES` map in each package's `__init__.py`. Nothing outside
 a plugin's own package imports it — shared cross-cutting helpers (e.g. the
@@ -47,9 +47,12 @@ app/services/scm/      ScmConnector: github, azure_devops, fake (+ diffparse)
 app/services/quality/  QualityConnector: noop (SonarQube goes here)
 app/services/review/   Reviewer: llm, plus chunking and prompt assembly
 app/services/apply/    Applier: noop, llm — turns an accepted suggestion into a pushed commit
+app/services/alignment/ AlignmentChecker: llm — does the PR deliver a pasted requirement?
 app/services/policy/   standards loading + the severity gate
 app/services/publish/  comment rendering and idempotent posting
 app/defaults/          config.yaml and the bundled standards markdown
+app/console/           admin console (/console): metrics and settings
+app/workspace/         PR workspace (/workspace): browse, apply, align, hand off to a phone
 ```
 
 Two facts explain most of the design:
@@ -211,11 +214,68 @@ default to unsupported (raise / return `None`); only `github.py` and
 this app's job — it relies on the push re-triggering whatever CI already
 reviews/tests the pull request.
 
+### PR workspace (`/workspace`)
+
+`app/workspace/` is a feature package for PR authors and reviewers, not
+admins: browse a pull request (diff, bot findings, human comments), apply one
+or all suggestions, dismiss a false positive, run the alignment check, and
+continue on a phone. Pages are thin Jinja shells filled by
+`static/workspace.js` from a JSON API under `/workspace/api/`; unlike
+`/console` it ships one script, and builds every node with
+`textContent` — `tests/test_workspace.py` fails on `innerHTML`, and on any
+icon or emoji in the pages, script or stylesheet.
+
+- **Identity is the user's own SCM token**, pasted once per browser tab
+  (sessionStorage) and sent as `X-SCM-Token`; nothing stores it. The apply
+  requester is always `ScmConnector.whoami()` of that token — a body that
+  names a requester is a 400 — so the "PR author only" gate is verified, not
+  trusted. `whoami`/`list_pull_requests` are optional connector methods
+  (GitHub and fake only). The fake connector treats the token *as* the login.
+- **Reading goes through `ReviewPipeline.snapshot()`**, which classifies
+  every comment with the same `_bot_finding`/`_already_applied`/
+  `_apply_refusal` that `/apply` uses, against the *target*-branch config —
+  so a disabled Apply button and the eventual refusal always agree.
+- **Phone handoff**: the desktop QR encodes only
+  `/workspace/m/redeem?code=…`; the token waits in `HandoffStore`
+  (`handoff.py`) for 120s, keyed by the code's SHA-256. A code redeems once,
+  only for the same `X-Forwarded-Email`, and is burned on any attempt. The
+  redeem page is a GET that does nothing until tapped, because link
+  scanners open URLs. Per-process, like `InMemoryJobStore`: behind several
+  replicas a redeem can miss, and the phone is told to scan again.
+- Access: any signed-in user, narrowed by `PRREVIEW_WORKSPACE_USERS`.
+  Locally `PRREVIEW_WORKSPACE_DEV_EMAIL` stands in for the proxy header, and
+  `scm: fake` / `fixture_dir` work — all three only while
+  `DATABRICKS_APP_NAME` is unset. Writes refuse cross-site requests through
+  `app/core/origin.py`, shared with the console. Jobs are pollable only by
+  the email that started them.
+
+Try it offline: `PRREVIEW_WORKSPACE_DEV_EMAIL=you@example.com uv run start-server`,
+open `/workspace`, pick "Local fixture", folder `tests/fixtures/workspace-pr`,
+and connect as `dev` (the fixture PR's author).
+
+### Alignment check (`POST /alignment`)
+
+Optional and on demand — nothing in `run()` calls it. The requester pastes a
+requirement and declares a `ChangeIntent` (requirement change, change /
+business ticket, feature, bug fix, refactor, other);
+`ReviewPipeline.check_alignment()` sends the whole diff — every changed text
+file, not only reviewable languages, up to `alignment_max_chars` — to the
+`alignment_checker` plugin and returns per-criterion met/partial/missing with
+`path:line` evidence, unrelated changes, and whether the diff reads as the
+declared kind. Failure policy is `_analyze`'s, with one difference: an
+*empty* reply is a failure here (silence is not a verdict), and an
+unparseable one always is; neither ever becomes `aligned`. A PR with no
+text changes is `unclear`. `post_comment` posts one PR-level report whose
+`prreview:alignment:<hash>` marker hashes intent + whitespace-normalised
+requirement, so a re-run is quiet; the publisher never auto-resolves it. The
+trace records the requirement's length, not its text. Guidance is editable
+in the console as `alignment_guidance`.
+
 ### Adding a plugin
 
 Subclass the ABC, decorate with `@<family>_registry.register("name")`, add the
 module to `_MODULES` in that package's `__init__.py`. It becomes selectable as
-`scm:` / `quality:` / `reviewer:` / `applier:` in config, and shows up in
+`scm:` / `quality:` / `reviewer:` / `applier:` / `alignment_checker:` in config, and shows up in
 `POST /config/effective`.
 
 Adding an analyzer is **only** a markdown file in `app/defaults/standards/` —
