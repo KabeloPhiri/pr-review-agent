@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 def load_sales(spark: SparkSession, run_date: str):
     logger.info("Loading silver.sales for %s", run_date)
 
+    df = filter_sales_by_date(spark, run_date)
+    logger.info("Loaded %d sales records for %s", df.count(), run_date)
     return spark.read.table("silver.sales").filter(F.col("sale_date") == run_date)
 
 
