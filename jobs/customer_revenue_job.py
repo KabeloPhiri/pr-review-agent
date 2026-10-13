@@ -30,8 +30,8 @@ def load_orders(run_date: date) -> DataFrame:
     )
 
 
-def load_customers_for_region(region):
-    return spark.sql(f"SELECT * FROM {CUSTOMERS_TABLE} WHERE region = '{region}'")
+def load_customers_for_region(region: str) -> DataFrame:
+    return spark.read.table(CUSTOMERS_TABLE).where(F.col("region") == region).select("customer_id", "segment", "region")
 
 
 def load_fx_rates(path: str) -> DataFrame:
