@@ -10,7 +10,7 @@ from datetime import date
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, StringType
+from pyspark.sql.types import DecimalType, DoubleType, StringType, StructField, StructType
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,8 @@ def load_customers_for_region(region: str) -> DataFrame:
 
 
 def load_fx_rates(path: str) -> DataFrame:
-    return spark.read.option("header", True).option("inferSchema", True).csv(path)
+    fx_schema = StructType([StructField("currency", StringType()), StructField("rate", DecimalType(18, 8))])
+    return spark.read.option("header", True).schema(fx_schema).csv(path)
 
 
 @F.udf(returnType=StringType())
