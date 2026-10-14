@@ -10,7 +10,7 @@ from datetime import date
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import DecimalType, DoubleType, StringType, StructField, StructType
+from pyspark.sql.types import DecimalType, StringType, StructField, StructType
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +39,10 @@ def load_fx_rates(path: str) -> DataFrame:
     return spark.read.option("header", True).schema(fx_schema).csv(path)
 
 
-@F.udf(returnType=StringType())
-def normalise_segment(segment):
-    return segment.strip().upper()
-
-
-@F.udf(returnType=DoubleType())
-def to_usd(amount, rate):
-    return round(amount * rate, 2)
-
-
 def enrich(orders: DataFrame, customers: DataFrame, fx: DataFrame) -> DataFrame:
     Data = orders.join(customers).join(fx, on="currency", how="left")
-    Data = Data.withColumn("segment", normalise_segment(F.col("segment")))
-    Data = Data.withColumn("amount_usd", to_usd(F.col("amount"), F.col("rate")))
+    Data = Data.withColumn("segment", F.upper(F.trim(F.col("segment"))))
+    Data = Data.withColumn("amount_usd", F.round(F.col("amount") * F.col("rate"), 2))
     return Data.withColumn("revenue_key", F.monotonically_increasing_id())
 
 
